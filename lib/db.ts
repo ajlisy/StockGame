@@ -48,6 +48,22 @@ export interface StockPrice {
   lastUpdated: string;
 }
 
+export interface InitialPosition {
+  playerId: string;
+  symbol: string;
+  quantity: number;
+  purchasePrice: number;
+  purchaseDate: string;
+}
+
+export interface PortfolioSnapshot {
+  playerId: string;
+  date: string; // YYYY-MM-DD
+  totalValue: number;
+  totalGainLoss: number;
+  totalGainLossPercent: number;
+}
+
 class Database {
   private getFilePath(file: string): string {
     return path.join(DATA_DIR, `${file}.json`);
@@ -163,6 +179,52 @@ class Database {
 
   saveStockPrices(prices: Record<string, StockPrice>): void {
     this.writeFile('stockPrices', prices);
+  }
+
+  // Initial Positions (for P&L tracking based on starting positions)
+  getInitialPositions(): InitialPosition[] {
+    return this.readFile<InitialPosition[]>('initialPositions', []);
+  }
+
+  getPlayerInitialPositions(playerId: string): InitialPosition[] {
+    const positions = this.getInitialPositions();
+    return positions.filter(p => p.playerId === playerId);
+  }
+
+  saveInitialPosition(position: InitialPosition): void {
+    const positions = this.getInitialPositions();
+    // Remove any existing initial position for this player/symbol
+    const filtered = positions.filter(
+      p => !(p.playerId === position.playerId && p.symbol === position.symbol)
+    );
+    filtered.push(position);
+    this.writeFile('initialPositions', filtered);
+  }
+
+  clearPlayerInitialPositions(playerId: string): void {
+    const positions = this.getInitialPositions();
+    const filtered = positions.filter(p => p.playerId !== playerId);
+    this.writeFile('initialPositions', filtered);
+  }
+
+  // Portfolio Snapshots (for historical value tracking)
+  getPortfolioSnapshots(): PortfolioSnapshot[] {
+    return this.readFile<PortfolioSnapshot[]>('portfolioSnapshots', []);
+  }
+
+  getPlayerSnapshots(playerId: string): PortfolioSnapshot[] {
+    const snapshots = this.getPortfolioSnapshots();
+    return snapshots.filter(s => s.playerId === playerId).sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  savePortfolioSnapshot(snapshot: PortfolioSnapshot): void {
+    const snapshots = this.getPortfolioSnapshots();
+    // Remove any existing snapshot for this player/date
+    const filtered = snapshots.filter(
+      s => !(s.playerId === snapshot.playerId && s.date === snapshot.date)
+    );
+    filtered.push(snapshot);
+    this.writeFile('portfolioSnapshots', filtered);
   }
 }
 

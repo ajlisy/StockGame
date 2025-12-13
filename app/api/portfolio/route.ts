@@ -18,39 +18,57 @@ export async function GET(request: NextRequest) {
       }
 
       const positions = db.getPlayerPositions(playerId);
-      const symbols = positions.map(p => p.symbol);
-      
+      const initialPositions = db.getPlayerInitialPositions(playerId);
+
+      // Get all symbols from both current and initial positions
+      const allSymbols = Array.from(new Set([
+        ...positions.map(p => p.symbol),
+        ...initialPositions.map(p => p.symbol)
+      ]));
+
       // Fetch current prices
-      const prices = await fetchMultipleStockPrices(symbols);
-      
+      const prices = await fetchMultipleStockPrices(allSymbols);
+
       // Update cached prices
       Object.entries(prices).forEach(([symbol, price]) => {
         db.saveStockPrice(symbol, price);
       });
 
-      // Calculate portfolio value
+      // Calculate portfolio value based on INITIAL positions for P&L
       let totalValue = player.currentCash || 0;
-      let totalCost = 0;
-      const stockDetails = positions.map(position => {
-        const currentPrice = prices[position.symbol] || position.purchasePrice || 0;
-        const currentValue = position.quantity * currentPrice;
-        const costBasis = position.quantity * (position.purchasePrice || 0);
+      let initialTotalValue = 0;
+
+      // Calculate current value and P&L based on initial positions
+      const stockDetails = initialPositions.map(initialPos => {
+        const currentPrice = prices[initialPos.symbol] || initialPos.purchasePrice || 0;
+        const costBasis = initialPos.quantity * initialPos.purchasePrice;
+        const currentValue = initialPos.quantity * currentPrice;
         const gainLoss = currentValue - costBasis;
         const gainLossPercent = costBasis > 0 ? (gainLoss / costBasis) * 100 : 0;
 
-        totalValue += currentValue;
-        totalCost += costBasis;
+        initialTotalValue += costBasis;
+
+        // Find current position (may be different from initial)
+        const currentPos = positions.find(p => p.symbol === initialPos.symbol);
 
         return {
-          symbol: position.symbol,
-          quantity: position.quantity,
-          purchasePrice: position.purchasePrice || 0,
+          symbol: initialPos.symbol,
+          quantity: currentPos?.quantity || 0, // Current quantity held
+          initialQuantity: initialPos.quantity, // Initial quantity from CSV
+          purchasePrice: initialPos.purchasePrice,
           currentPrice: currentPrice || 0,
           costBasis,
           currentValue,
           gainLoss,
           gainLossPercent,
         };
+      });
+
+      // Add current cash to total value
+      totalValue = player.currentCash || 0;
+      // Add current value of initial positions
+      stockDetails.forEach(stock => {
+        totalValue += stock.currentValue;
       });
 
       // P&L is total portfolio value minus starting cash ($100,000)
@@ -60,6 +78,16 @@ export async function GET(request: NextRequest) {
       const totalGainLossPercent = startingCash > 0
         ? ((totalValue - startingCash) / startingCash) * 100
         : 0;
+
+      // Save daily snapshot
+      const today = new Date().toISOString().split('T')[0];
+      db.savePortfolioSnapshot({
+        playerId: player.id,
+        date: today,
+        totalValue,
+        totalGainLoss,
+        totalGainLossPercent,
+      });
 
       return NextResponse.json({
         player: {
@@ -77,8 +105,13 @@ export async function GET(request: NextRequest) {
       // Return all players' portfolios
       const players = db.getPlayers();
       const allPositions = db.getPositions();
-      const allSymbols = Array.from(new Set(allPositions.map(p => p.symbol)));
-      
+      const allInitialPositions = db.getInitialPositions();
+
+      const allSymbols = Array.from(new Set([
+        ...allPositions.map(p => p.symbol),
+        ...allInitialPositions.map(p => p.symbol)
+      ]));
+
       // Fetch all stock prices
       const prices = await fetchMultipleStockPrices(allSymbols);
       Object.entries(prices).forEach(([symbol, price]) => {
@@ -87,23 +120,31 @@ export async function GET(request: NextRequest) {
 
       const portfolios = players.map(player => {
         const positions = allPositions.filter(p => p.playerId === player.id);
-        let totalValue = player.currentCash || 0;
-        let totalCost = 0;
+        const initialPositions = allInitialPositions.filter(p => p.playerId === player.id);
 
-        const stockDetails = positions.map(position => {
-          const currentPrice = prices[position.symbol] || position.purchasePrice || 0;
-          const currentValue = position.quantity * currentPrice;
-          const costBasis = position.quantity * (position.purchasePrice || 0);
+        let totalValue = player.currentCash || 0;
+        let initialTotalValue = 0;
+
+        // Calculate based on initial positions
+        const stockDetails = initialPositions.map(initialPos => {
+          const currentPrice = prices[initialPos.symbol] || initialPos.purchasePrice || 0;
+          const costBasis = initialPos.quantity * initialPos.purchasePrice;
+          const currentValue = initialPos.quantity * currentPrice;
           const gainLoss = currentValue - costBasis;
           const gainLossPercent = costBasis > 0 ? (gainLoss / costBasis) * 100 : 0;
 
+          initialTotalValue += costBasis;
+
+          // Find current position
+          const currentPos = positions.find(p => p.symbol === initialPos.symbol);
+
           totalValue += currentValue;
-          totalCost += costBasis;
 
           return {
-            symbol: position.symbol,
-            quantity: position.quantity,
-            purchasePrice: position.purchasePrice || 0,
+            symbol: initialPos.symbol,
+            quantity: currentPos?.quantity || 0,
+            initialQuantity: initialPos.quantity,
+            purchasePrice: initialPos.purchasePrice,
             currentPrice: currentPrice || 0,
             costBasis,
             currentValue,
@@ -119,6 +160,16 @@ export async function GET(request: NextRequest) {
         const totalGainLossPercent = startingCash > 0
           ? ((totalValue - startingCash) / startingCash) * 100
           : 0;
+
+        // Save daily snapshot
+        const today = new Date().toISOString().split('T')[0];
+        db.savePortfolioSnapshot({
+          playerId: player.id,
+          date: today,
+          totalValue,
+          totalGainLoss,
+          totalGainLossPercent,
+        });
 
         return {
         player: {

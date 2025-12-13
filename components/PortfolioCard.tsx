@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import StockChart from './StockChart';
+import PortfolioValueChart from './PortfolioValueChart';
 
 interface HistoricalPrice {
   date: string;
@@ -102,6 +103,11 @@ export default function PortfolioCard({ portfolio, isLeader, newsContent }: Port
         <div className="mt-3 text-sm text-[#71767b]">
           Cash: <span className="text-white font-medium">${player.currentCash.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
         </div>
+      </div>
+
+      {/* Portfolio Value Chart */}
+      <div className="px-6 py-4 border-b border-[#2f3336]">
+        <PortfolioValueChart playerId={player.id} startingCash={player.startingCash} />
       </div>
 
       {/* News Section */}

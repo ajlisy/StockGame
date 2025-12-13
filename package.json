@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.71.2",
     "bcryptjs": "^2.4.3",
     "next": "^14.0.0",
     "papaparse": "^5.4.1",

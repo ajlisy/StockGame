@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchHistoricalPrices } from '@/lib/stockApi';
+import { analyzeSectors } from '@/lib/newsApi';
+import { getCachedNews, setCachedNews, shouldGenerateNews } from '@/lib/newsCache';
+import Anthropic from '@anthropic-ai/sdk';
 
 interface PortfolioPosition {
   symbol: string;
@@ -36,22 +39,91 @@ export async function POST(request: NextRequest) {
 
     if (!portfolio || !portfolio.positions || portfolio.positions.length === 0) {
       return NextResponse.json({
-        summary: '',
-        bullets: [],
+        weekSummary: '',
+        weekBullets: [],
+        todaySummary: '',
+        todayBullets: [],
       });
+    }
+
+    // Check if we have cached news for today
+    const cachedNews = getCachedNews(portfolio.player.id);
+    if (cachedNews) {
+      console.log(`Using cached news for ${portfolio.player.name}`);
+      return NextResponse.json({
+        weekSummary: cachedNews.weekSummary,
+        weekBullets: cachedNews.weekBullets,
+        todaySummary: cachedNews.todaySummary,
+        todayBullets: cachedNews.todayBullets,
+      });
+    }
+
+    // Check if it's after market close (3:30 PM EST)
+    if (!shouldGenerateNews()) {
+      console.log('Market not closed yet. Using fallback news.');
+      return generateFallbackNews(portfolio);
+    }
+
+    // Check if API key is configured
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      console.warn('ANTHROPIC_API_KEY not configured. Using fallback news generation.');
+      return generateFallbackNews(portfolio);
     }
 
     // Fetch historical prices for all positions
     const historicalData: Record<string, HistoricalPrice[]> = {};
     for (const position of portfolio.positions) {
-      const history = await fetchHistoricalPrices(position.symbol, 5);
+      const history = await fetchHistoricalPrices(position.symbol, 7);
       historicalData[position.symbol] = history;
     }
 
-    // Generate news summary and bullets
-    const { summary, bullets } = generateNews(portfolio, historicalData);
+    // Determine top sectors
+    const topSectors = analyzeSectors(portfolio.positions);
 
-    return NextResponse.json({ summary, bullets });
+    // Gather context for Claude
+    const portfolioContext = buildPortfolioContext(portfolio, historicalData, topSectors);
+
+    // Use Claude to analyze and generate news
+    const anthropic = new Anthropic({ apiKey });
+
+    const message = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1024,
+      messages: [
+        {
+          role: 'user',
+          content: `You are a financial analyst providing portfolio updates. Analyze the following portfolio and market data to generate concise, actionable insights.
+
+${portfolioContext}
+
+Generate a JSON response with the following structure:
+{
+  "weekSummary": "Brief 1-sentence summary of key portfolio drivers over the past week",
+  "weekBullets": ["2-3 specific bullet points about the most important portfolio movements this week"],
+  "todaySummary": "Brief 1-sentence summary of key portfolio drivers today",
+  "todayBullets": ["2-3 specific bullet points about the most important portfolio movements today"]
+}
+
+Focus on:
+1. Stock-specific news that actually affected the portfolio
+2. Sector trends in the portfolio's top sectors: ${topSectors.join(', ')}
+3. Macro market movements that impacted the overall portfolio
+
+Be specific with percentages and dollar amounts from the data provided. Only mention what's truly significant.`
+        }
+      ]
+    });
+
+    // Parse Claude's response
+    const responseText = message.content[0].type === 'text' ? message.content[0].text : '';
+    const newsData = parseClaudeResponse(responseText);
+
+    // Cache the results
+    setCachedNews(portfolio.player.id, newsData);
+    console.log(`Cached news for ${portfolio.player.name}`);
+
+    return NextResponse.json(newsData);
   } catch (error) {
     console.error('News generation error:', error);
     return NextResponse.json(
@@ -61,85 +133,127 @@ export async function POST(request: NextRequest) {
   }
 }
 
-function generateNews(
+function buildPortfolioContext(
   portfolio: Portfolio,
-  historicalData: Record<string, HistoricalPrice[]>
-): { summary: string; bullets: string[] } {
-  const bullets: string[] = [];
+  historicalData: Record<string, HistoricalPrice[]>,
+  topSectors: string[]
+): string {
   const { player, positions } = portfolio;
 
-  // Calculate overall portfolio performance
-  const isPositive = player.totalGainLoss >= 0;
-  const performanceWord = isPositive ? 'up' : 'down';
-  const gainLossAbs = Math.abs(player.totalGainLoss);
-  const percentAbs = Math.abs(player.totalGainLossPercent);
+  let context = `PORTFOLIO: ${player.name}\n`;
+  context += `Total Value: $${player.totalValue.toLocaleString()}\n`;
+  context += `Total P&L: ${player.totalGainLoss >= 0 ? '+' : ''}$${player.totalGainLoss.toLocaleString()} (${player.totalGainLossPercent.toFixed(2)}%)\n`;
+  context += `Top Sectors: ${topSectors.join(', ')}\n\n`;
 
-  // Generate summary
-  let summary = `${player.name}'s portfolio is ${performanceWord} $${gainLossAbs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${percentAbs.toFixed(2)}%) from the $100k starting position.`;
-
-  // Analyze each position for bullets
+  context += `POSITIONS:\n`;
   for (const position of positions) {
     const history = historicalData[position.symbol] || [];
 
+    // Calculate daily and weekly changes
+    let dailyChange = 0;
+    let weeklyChange = 0;
+
     if (history.length >= 2) {
-      // Calculate daily change (most recent vs second most recent)
-      const latestPrice = history[history.length - 1]?.price || position.currentPrice;
-      const previousPrice = history[history.length - 2]?.price || latestPrice;
-      const dailyChange = latestPrice - previousPrice;
-      const dailyChangePercent = previousPrice > 0 ? (dailyChange / previousPrice) * 100 : 0;
-
-      if (Math.abs(dailyChangePercent) >= 0.5) {
-        const direction = dailyChange >= 0 ? 'gained' : 'lost';
-        bullets.push(
-          `${position.symbol} ${direction} ${Math.abs(dailyChangePercent).toFixed(2)}% today, ${dailyChange >= 0 ? 'adding' : 'reducing'} $${Math.abs(dailyChange * position.quantity).toFixed(2)} to the position.`
-        );
-      }
+      const latest = history[history.length - 1]?.price || position.currentPrice;
+      const yesterday = history[history.length - 2]?.price || latest;
+      dailyChange = ((latest - yesterday) / yesterday) * 100;
     }
 
-    // Multi-day trend analysis
-    if (history.length >= 4) {
-      const fourDaysAgo = history[0]?.price;
-      const now = history[history.length - 1]?.price || position.currentPrice;
-
-      if (fourDaysAgo && now) {
-        const weekChange = now - fourDaysAgo;
-        const weekChangePercent = (weekChange / fourDaysAgo) * 100;
-
-        if (Math.abs(weekChangePercent) >= 2) {
-          const trend = weekChange >= 0 ? 'rallied' : 'declined';
-          bullets.push(
-            `${position.symbol} has ${trend} ${Math.abs(weekChangePercent).toFixed(2)}% over the past 4 trading days.`
-          );
-        }
-      }
+    if (history.length >= 5) {
+      const latest = history[history.length - 1]?.price || position.currentPrice;
+      const weekAgo = history[0]?.price || latest;
+      weeklyChange = ((latest - weekAgo) / weekAgo) * 100;
     }
 
-    // Position-specific performance
-    if (Math.abs(position.gainLossPercent) >= 5) {
-      const status = position.gainLoss >= 0 ? 'profit' : 'loss';
-      bullets.push(
-        `${position.symbol} holding shows a ${Math.abs(position.gainLossPercent).toFixed(2)}% ${status} since purchase.`
-      );
+    context += `- ${position.symbol}: ${position.quantity} shares @ $${position.currentPrice.toFixed(2)}\n`;
+    context += `  Value: $${position.currentValue.toLocaleString()}, P&L: ${position.gainLoss >= 0 ? '+' : ''}$${position.gainLoss.toFixed(2)} (${position.gainLossPercent.toFixed(2)}%)\n`;
+    if (dailyChange !== 0) {
+      context += `  Daily Change: ${dailyChange >= 0 ? '+' : ''}${dailyChange.toFixed(2)}%\n`;
+    }
+    if (weeklyChange !== 0) {
+      context += `  Weekly Change: ${weeklyChange >= 0 ? '+' : ''}${weeklyChange.toFixed(2)}%\n`;
     }
   }
 
-  // Add cash position note if significant
-  const cashPercent = (player.currentCash / player.totalValue) * 100;
-  if (cashPercent >= 20) {
-    bullets.push(
-      `${cashPercent.toFixed(0)}% of portfolio is in cash, available for new positions.`
+  return context;
+}
+
+function parseClaudeResponse(responseText: string): {
+  weekSummary: string;
+  weekBullets: string[];
+  todaySummary: string;
+  todayBullets: string[];
+} {
+  try {
+    // Try to extract JSON from the response
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      return {
+        weekSummary: parsed.weekSummary || '',
+        weekBullets: Array.isArray(parsed.weekBullets) ? parsed.weekBullets : [],
+        todaySummary: parsed.todaySummary || '',
+        todayBullets: Array.isArray(parsed.todayBullets) ? parsed.todayBullets : [],
+      };
+    }
+  } catch (error) {
+    console.error('Error parsing Claude response:', error);
+  }
+
+  // Fallback if parsing fails
+  return {
+    weekSummary: '',
+    weekBullets: [],
+    todaySummary: '',
+    todayBullets: [],
+  };
+}
+
+function generateFallbackNews(portfolio: Portfolio): NextResponse {
+  // Simple fallback when API key is not configured
+  const { player, positions } = portfolio;
+  const isPositive = player.totalGainLoss >= 0;
+  const performanceWord = isPositive ? 'up' : 'down';
+
+  const weekBullets: string[] = [];
+  const todayBullets: string[] = [];
+
+  // Analyze positions for weekly performance
+  const sortedByGain = [...positions].sort((a, b) => b.gainLoss - a.gainLoss);
+  const topWinner = sortedByGain[0];
+  const topLoser = sortedByGain[sortedByGain.length - 1];
+
+  if (topWinner && topWinner.gainLoss > 0) {
+    weekBullets.push(
+      `${topWinner.symbol} leading gains with +${topWinner.gainLossPercent.toFixed(2)}% performance since purchase.`
     );
   }
 
-  // Limit to 4 bullets
-  const limitedBullets = bullets.slice(0, 4);
-
-  // If no bullets generated, add a generic one
-  if (limitedBullets.length === 0) {
-    limitedBullets.push(
-      `Portfolio holds ${positions.length} position${positions.length !== 1 ? 's' : ''} with ${isPositive ? 'positive' : 'negative'} overall returns.`
+  if (topLoser && topLoser.gainLoss < 0) {
+    weekBullets.push(
+      `${topLoser.symbol} underperforming with ${topLoser.gainLossPercent.toFixed(2)}% decline since purchase.`
     );
   }
 
-  return { summary, bullets: limitedBullets };
+  weekBullets.push(
+    `Overall portfolio ${performanceWord} ${Math.abs(player.totalGainLossPercent).toFixed(2)}% from initial value.`
+  );
+
+  // For today, use similar but different phrasing
+  todayBullets.push(
+    `Portfolio currently valued at $${player.totalValue.toLocaleString()}.`
+  );
+
+  if (positions.length > 0) {
+    todayBullets.push(
+      `Holding ${positions.length} position${positions.length !== 1 ? 's' : ''} across ${new Set(positions.map(p => p.symbol)).size} stocks.`
+    );
+  }
+
+  return NextResponse.json({
+    weekSummary: `Portfolio ${performanceWord} ${Math.abs(player.totalGainLossPercent).toFixed(2)}% over the tracking period.`,
+    weekBullets: weekBullets.slice(0, 3),
+    todaySummary: `Current portfolio status as of today.`,
+    todayBullets: todayBullets.slice(0, 3),
+  });
 }

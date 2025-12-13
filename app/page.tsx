@@ -28,8 +28,10 @@ interface Portfolio {
 
 interface NewsData {
   playerId: string;
-  summary: string;
-  bullets: string[];
+  weekSummary: string;
+  weekBullets: string[];
+  todaySummary: string;
+  todayBullets: string[];
   loading: boolean;
 }
 
@@ -90,7 +92,7 @@ export default function Home() {
 
     setNewsData(prev => ({
       ...prev,
-      [playerId]: { playerId, summary: '', bullets: [], loading: true }
+      [playerId]: { playerId, weekSummary: '', weekBullets: [], todaySummary: '', todayBullets: [], loading: true }
     }));
 
     try {
@@ -105,8 +107,10 @@ export default function Home() {
         ...prev,
         [playerId]: {
           playerId,
-          summary: data.summary || '',
-          bullets: data.bullets || [],
+          weekSummary: data.weekSummary || '',
+          weekBullets: data.weekBullets || [],
+          todaySummary: data.todaySummary || '',
+          todayBullets: data.todayBullets || [],
           loading: false
         }
       }));
@@ -114,7 +118,7 @@ export default function Home() {
       console.error('Error fetching news:', error);
       setNewsData(prev => ({
         ...prev,
-        [playerId]: { playerId, summary: '', bullets: [], loading: false }
+        [playerId]: { playerId, weekSummary: '', weekBullets: [], todaySummary: '', todayBullets: [], loading: false }
       }));
     }
   };
@@ -138,25 +142,50 @@ export default function Home() {
       );
     }
 
-    if (!news.summary && news.bullets.length === 0) {
+    if (!news.weekSummary && news.weekBullets.length === 0 && !news.todaySummary && news.todayBullets.length === 0) {
       return null;
     }
 
     return (
-      <div>
-        <h4 className="text-sm font-semibold text-[#71767b] uppercase tracking-wider mb-2">Market Update</h4>
-        {news.summary && (
-          <p className="text-sm text-gray-300 mb-2">{news.summary}</p>
+      <div className="space-y-4">
+        {/* This Week Section */}
+        {(news.weekSummary || news.weekBullets.length > 0) && (
+          <div>
+            <h4 className="text-sm font-semibold text-emerald-400 mb-2">📈 Key Portfolio Drivers This Week</h4>
+            {news.weekSummary && (
+              <p className="text-sm text-gray-300 mb-2">{news.weekSummary}</p>
+            )}
+            {news.weekBullets.length > 0 && (
+              <ul className="space-y-1">
+                {news.weekBullets.map((bullet, idx) => (
+                  <li key={idx} className="text-sm text-gray-400 flex items-start gap-2">
+                    <span className="text-emerald-400 mt-1">•</span>
+                    <span>{bullet}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
-        {news.bullets.length > 0 && (
-          <ul className="space-y-1">
-            {news.bullets.map((bullet, idx) => (
-              <li key={idx} className="text-sm text-gray-400 flex items-start gap-2">
-                <span className="text-emerald-400 mt-1">•</span>
-                <span>{bullet}</span>
-              </li>
-            ))}
-          </ul>
+
+        {/* Today Section */}
+        {(news.todaySummary || news.todayBullets.length > 0) && (
+          <div>
+            <h4 className="text-sm font-semibold text-blue-400 mb-2">📊 Key Portfolio Drivers Today</h4>
+            {news.todaySummary && (
+              <p className="text-sm text-gray-300 mb-2">{news.todaySummary}</p>
+            )}
+            {news.todayBullets.length > 0 && (
+              <ul className="space-y-1">
+                {news.todayBullets.map((bullet, idx) => (
+                  <li key={idx} className="text-sm text-gray-400 flex items-start gap-2">
+                    <span className="text-blue-400 mt-1">•</span>
+                    <span>{bullet}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
       </div>
     );

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, Player, Position } from '@/lib/db';
+import { db, Player, Position, InitialPosition } from '@/lib/db';
 import { hashPassword } from '@/lib/auth';
 import Papa from 'papaparse';
 
@@ -123,10 +123,23 @@ export async function POST(request: NextRequest) {
                 db.deletePosition(existingPos.id);
               }
 
-              // Save new positions
+              // Clear existing initial positions
+              db.clearPlayerInitialPositions(player.id);
+
+              // Save new positions (both current and initial)
               for (const position of playerData.positions) {
                 position.playerId = player.id;
                 db.savePosition(position);
+
+                // Also save as initial position for P&L tracking
+                const initialPosition: InitialPosition = {
+                  playerId: player.id,
+                  symbol: position.symbol,
+                  quantity: position.quantity,
+                  purchasePrice: position.purchasePrice,
+                  purchaseDate: position.purchaseDate,
+                };
+                db.saveInitialPosition(initialPosition);
               }
             }
 

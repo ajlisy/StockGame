@@ -6,10 +6,11 @@ A modern, full-featured stock trading competition platform built with Next.js, T
 
 - 📊 **Real-time Portfolio Tracking**: See current portfolio values, P&L, and performance metrics
 - 🏆 **Leaderboard**: Clear indication of who's ahead in the competition
-- 📈 **Stock Performance**: Detailed breakdown of how each stock is performing
+- 📈 **Stock Charts**: Interactive mini charts showing price trends for each position
+- 🤖 **AI-Powered News**: Claude AI analyzes portfolio drivers daily and weekly
 - 💰 **Secure Trading**: Password-protected trading interface with validation
-- 📁 **CSV Import**: Easy upload of initial positions from December 7th
-- 🎨 **Modern UI**: Beautiful, responsive design with Tailwind CSS
+- 📁 **CSV Import**: Easy upload of initial positions with $CASH support
+- 🎨 **Dark Mode UI**: Beautiful, modern dark theme
 - ✅ **Trade Validation**: Prevents trades exceeding available cash and enforces single-stock rule
 
 ## Tech Stack
@@ -19,6 +20,8 @@ A modern, full-featured stock trading competition platform built with Next.js, T
 - **Backend**: Next.js API Routes (Serverless)
 - **Database**: JSON file-based storage (simple, no external DB needed)
 - **Stock Data**: Yahoo Finance API (free, no API key required)
+- **Charts**: Recharts
+- **AI Analysis**: Anthropic Claude API (Sonnet 4)
 - **Deployment**: AWS Amplify
 
 ## Getting Started
@@ -26,7 +29,8 @@ A modern, full-featured stock trading competition platform built with Next.js, T
 ### Prerequisites
 
 - Node.js 18+ and npm
-- AWS Account (for deployment)
+- Anthropic API key (for AI-powered portfolio news)
+- AWS Account (for deployment, optional)
 
 ### Local Development
 
@@ -46,12 +50,24 @@ A modern, full-featured stock trading competition platform built with Next.js, T
    mkdir -p data
    ```
 
-4. **Run the development server**
+4. **Set up environment variables**
+   ```bash
+   cp .env.local.example .env.local
+   ```
+
+   Edit `.env.local` and add your Anthropic API key:
+   ```
+   ANTHROPIC_API_KEY=your_api_key_here
+   ```
+
+   Get your API key from: https://console.anthropic.com/
+
+5. **Run the development server**
    ```bash
    npm run dev
    ```
 
-5. **Open your browser**
+6. **Open your browser**
    Navigate to [http://localhost:3000](http://localhost:3000)
 
 ### Initial Setup
@@ -61,9 +77,12 @@ A modern, full-featured stock trading competition platform built with Next.js, T
    - Upload a CSV file with the following format:
      ```csv
      Player, Symbol, Quantity, PurchasePrice, Date
+     John, $CASH, 1, 5000.00, 2024-12-07
      John, AAPL, 10, 150.50, 2024-12-07
+     Jane, $CASH, 1, 3000.00, 2024-12-07
      Jane, GOOGL, 8, 140.75, 2024-12-07
      ```
+   - Use `$CASH` symbol to specify player's starting cash
    - New players will be created with default password: `changeme`
    - **Important**: Players should change their passwords after first login
 
@@ -76,18 +95,22 @@ A modern, full-featured stock trading competition platform built with Next.js, T
 The CSV file for initial positions should have the following columns:
 
 - **Player**: Player's name (case-insensitive)
-- **Symbol**: Stock ticker symbol (e.g., AAPL, MSFT, GOOGL)
-- **Quantity**: Number of shares
-- **PurchasePrice**: Price per share at purchase
+- **Symbol**: Stock ticker symbol (e.g., AAPL, MSFT, GOOGL) or `$CASH` for cash position
+- **Quantity**: Number of shares (or 1 for cash entries)
+- **PurchasePrice**: Price per share at purchase (or cash amount for `$CASH` entries)
 - **Date**: Purchase date (format: YYYY-MM-DD)
 
 Example:
 ```csv
 Player, Symbol, Quantity, PurchasePrice, Date
+John, $CASH, 1, 5000.00, 2024-12-07
 John, AAPL, 10, 150.50, 2024-12-07
 John, MSFT, 5, 380.25, 2024-12-07
+Jane, $CASH, 1, 3000.00, 2024-12-07
 Jane, GOOGL, 8, 140.75, 2024-12-07
 ```
+
+**Note**: The `$CASH` entry allows you to specify each player's starting cash. The system will calculate P&L based on the total initial value (stocks + cash).
 
 ## Trading Rules
 

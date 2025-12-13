@@ -64,9 +64,22 @@ Data files stored as JSON:
 **Yahoo Finance API** (lib/stockApi.ts) - no API key required:
 - Endpoint: `query1.finance.yahoo.com/v8/finance/chart/{symbol}`
 - Returns `regularMarketPrice` or falls back to `previousClose`
+- Historical prices: fetches last 7 days of data for charts and news analysis
 - 100ms delay between batch requests to avoid rate limiting
 - Prices cached in `stockPrices.json` to minimize API calls
 - Alternative: Alpha Vantage API (requires `ALPHA_VANTAGE_API_KEY` env var)
+
+### AI News Analysis
+
+**Claude API Integration** (app/api/news/route.ts):
+- Uses Anthropic Claude Sonnet 4 to analyze portfolio performance
+- Generates two news sections: "Key Portfolio Drivers This Week" and "Today"
+- Analysis includes:
+  - Stock-specific price movements (daily and weekly changes)
+  - Sector allocation (top 2 sectors from lib/newsApi.ts sector mapping)
+  - Portfolio-level P&L trends
+- Returns 2-3 actionable bullet points per section
+- Falls back to rule-based analysis if `ANTHROPIC_API_KEY` not configured
 
 ### CSV Import System
 
@@ -142,7 +155,16 @@ Code automatically detects AWS Lambda via `process.env.AWS_LAMBDA_FUNCTION_NAME`
 
 - **Next.js 14** (App Router with server components)
 - **TypeScript** (strict mode)
-- **Tailwind CSS** (utility-first styling)
+- **Tailwind CSS** (utility-first styling, dark mode)
+- **Recharts** (stock price charts)
+- **Anthropic Claude API** (AI-powered portfolio news analysis)
 - **bcryptjs** (password hashing)
 - **papaparse** (CSV parsing)
 - **Yahoo Finance API** (free stock prices, no auth)
+
+## Environment Variables
+
+Required environment variables in `.env.local`:
+- `ANTHROPIC_API_KEY`: API key for Claude AI news analysis (get from https://console.anthropic.com/)
+
+If `ANTHROPIC_API_KEY` is not set, the news API will fall back to simple rule-based analysis.
