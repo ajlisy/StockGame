@@ -14,7 +14,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const player = db.getPlayer(playerId);
+    const player = await db.getPlayer(playerId);
     if (!player) {
       return NextResponse.json(
         { error: 'Player not found' },
@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Fetch current stock price
-    let price = db.getStockPrice(symbol);
+    let price = await db.getStockPrice(symbol);
     if (!price) {
       // Fetch from API if not cached
       const fetchedPrice = await fetchStockPrice(symbol);
@@ -50,11 +50,11 @@ export async function POST(request: NextRequest) {
         );
       }
       price = fetchedPrice;
-      db.saveStockPrice(symbol, price);
+      await db.saveStockPrice(symbol, price);
     }
 
     // Validate trade
-    const validation = validateTrade(player, symbol, type, quantity, price);
+    const validation = await validateTrade(player, symbol, type, quantity, price);
     if (!validation.valid) {
       return NextResponse.json(
         { error: validation.error },
@@ -68,10 +68,10 @@ export async function POST(request: NextRequest) {
     if (type === 'BUY') {
       // Update cash
       player.currentCash -= totalAmount;
-      db.savePlayer(player);
+      await db.savePlayer(player);
 
       // Update or create position
-      const positions = db.getPlayerPositions(player.id);
+      const positions = await db.getPlayerPositions(player.id);
       const existingPosition = positions.find(p => p.symbol === symbol);
 
       if (existingPosition) {
@@ -80,7 +80,7 @@ export async function POST(request: NextRequest) {
         const totalQuantity = existingPosition.quantity + quantity;
         existingPosition.purchasePrice = totalCost / totalQuantity;
         existingPosition.quantity = totalQuantity;
-        db.savePosition(existingPosition);
+        await db.savePosition(existingPosition);
       } else {
         // Create new position
         const newPosition: import('@/lib/db').Position = {
@@ -92,25 +92,25 @@ export async function POST(request: NextRequest) {
           purchaseDate: new Date().toISOString().split('T')[0],
           createdAt: new Date().toISOString(),
         };
-        db.savePosition(newPosition);
+        await db.savePosition(newPosition);
       }
     } else if (type === 'SELL') {
       // Update cash
       player.currentCash += totalAmount;
-      db.savePlayer(player);
+      await db.savePlayer(player);
 
       // Update position
-      const positions = db.getPlayerPositions(player.id);
+      const positions = await db.getPlayerPositions(player.id);
       const position = positions.find(p => p.symbol === symbol);
       
       if (position) {
         if (position.quantity === quantity) {
           // Sell all shares - delete position
-          db.deletePosition(position.id);
+          await db.deletePosition(position.id);
         } else {
           // Partial sale
           position.quantity -= quantity;
-          db.savePosition(position);
+          await db.savePosition(position);
         }
       }
     }
@@ -126,7 +126,7 @@ export async function POST(request: NextRequest) {
       totalAmount,
       date: new Date().toISOString(),
     };
-    db.saveTransaction(transaction);
+    await db.saveTransaction(transaction);
 
     return NextResponse.json({ 
       success: true, 

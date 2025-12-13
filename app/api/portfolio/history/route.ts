@@ -12,7 +12,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const snapshots = db.getPlayerSnapshots(playerId);
+    const snapshots = await db.getPlayerSnapshots(playerId);
 
     return NextResponse.json({ snapshots });
   } catch (error) {

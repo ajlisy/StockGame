@@ -81,7 +81,7 @@ export async function POST(request: NextRequest) {
             const cashReport: Record<string, { initialTotalValue: number; stockValue: number; cash: number }> = {};
 
             for (const [playerName, playerData] of Array.from(playersMap.entries())) {
-              let player = db.getPlayerByName(playerName);
+              let player = await db.getPlayerByName(playerName);
 
               // Starting cash = total initial value (all stock positions + cash)
               const initialTotalValue = playerData.totalCost;
@@ -107,29 +107,29 @@ export async function POST(request: NextRequest) {
                   currentCash: currentCash, // Cash position from CSV
                   createdAt: new Date().toISOString(),
                 };
-                db.savePlayer(player);
+                await db.savePlayer(player);
                 createdPlayers.push(playerName);
               } else {
                 // Update existing player
                 player.startingCash = initialTotalValue;
                 player.currentCash = currentCash;
-                db.savePlayer(player);
+                await db.savePlayer(player);
               }
 
               // Delete existing positions for this player before adding new ones
               // (This ensures a clean upload of initial positions)
-              const existingPositions = db.getPlayerPositions(player.id);
+              const existingPositions = await db.getPlayerPositions(player.id);
               for (const existingPos of existingPositions) {
-                db.deletePosition(existingPos.id);
+                await db.deletePosition(existingPos.id);
               }
 
               // Clear existing initial positions
-              db.clearPlayerInitialPositions(player.id);
+              await db.clearPlayerInitialPositions(player.id);
 
               // Save new positions (both current and initial)
               for (const position of playerData.positions) {
                 position.playerId = player.id;
-                db.savePosition(position);
+                await db.savePosition(position);
 
                 // Also save as initial position for P&L tracking
                 const initialPosition: InitialPosition = {
@@ -139,7 +139,7 @@ export async function POST(request: NextRequest) {
                   purchasePrice: position.purchasePrice,
                   purchaseDate: position.purchaseDate,
                 };
-                db.saveInitialPosition(initialPosition);
+                await db.saveInitialPosition(initialPosition);
               }
             }
 

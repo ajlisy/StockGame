@@ -1,14 +1,23 @@
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, ScanCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
 import fs from 'fs';
 import path from 'path';
 
-// For serverless environments, use /tmp for writable storage
-// For local development, use data/ directory
-const DATA_DIR = process.env.AWS_LAMBDA_FUNCTION_NAME 
-  ? '/tmp/data'
-  : path.join(process.cwd(), 'data');
+// Use DynamoDB in production (AWS), file system in local development
+const USE_DYNAMODB = process.env.AWS_REGION && process.env.DYNAMODB_TABLE_NAME;
+const TABLE_NAME = process.env.DYNAMODB_TABLE_NAME || 'stock-competition';
+const REGION = process.env.AWS_REGION || 'us-east-1';
 
-// Ensure data directory exists
-if (!fs.existsSync(DATA_DIR)) {
+// Initialize DynamoDB client
+let dynamoClient: DynamoDBDocumentClient | null = null;
+if (USE_DYNAMODB) {
+  const client = new DynamoDBClient({ region: REGION });
+  dynamoClient = DynamoDBDocumentClient.from(client);
+}
+
+// File system fallback for local development
+const DATA_DIR = path.join(process.cwd(), 'data');
+if (!USE_DYNAMODB && !fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
@@ -65,6 +74,93 @@ export interface PortfolioSnapshot {
 }
 
 class Database {
+  // DynamoDB methods
+  private async dynamoGet<T>(pk: string, sk: string): Promise<T | null> {
+    if (!dynamoClient) return null;
+    try {
+      const result = await dynamoClient.send(
+        new GetCommand({
+          TableName: TABLE_NAME,
+          Key: { pk, sk },
+        })
+      );
+      return result.Item ? (result.Item.data as T) : null;
+    } catch (error) {
+      console.error('DynamoDB get error:', error);
+      return null;
+    }
+  }
+
+  private async dynamoPut<T>(pk: string, sk: string, data: T): Promise<void> {
+    if (!dynamoClient) return;
+    try {
+      await dynamoClient.send(
+        new PutCommand({
+          TableName: TABLE_NAME,
+          Item: { pk, sk, data },
+        })
+      );
+    } catch (error) {
+      console.error('DynamoDB put error:', error);
+      throw error;
+    }
+  }
+
+  private async dynamoQuery<T>(pk: string, skPrefix?: string): Promise<T[]> {
+    if (!dynamoClient) return [];
+    try {
+      const params: any = {
+        TableName: TABLE_NAME,
+        KeyConditionExpression: 'pk = :pk',
+        ExpressionAttributeValues: { ':pk': pk },
+      };
+
+      if (skPrefix) {
+        params.KeyConditionExpression += ' AND begins_with(sk, :skPrefix)';
+        params.ExpressionAttributeValues[':skPrefix'] = skPrefix;
+      }
+
+      const result = await dynamoClient.send(new QueryCommand(params));
+      return (result.Items || []).map(item => item.data as T);
+    } catch (error) {
+      console.error('DynamoDB query error:', error);
+      return [];
+    }
+  }
+
+  private async dynamoScan<T>(pkPrefix: string): Promise<T[]> {
+    if (!dynamoClient) return [];
+    try {
+      const result = await dynamoClient.send(
+        new ScanCommand({
+          TableName: TABLE_NAME,
+          FilterExpression: 'begins_with(pk, :pkPrefix)',
+          ExpressionAttributeValues: { ':pkPrefix': pkPrefix },
+        })
+      );
+      return (result.Items || []).map(item => item.data as T);
+    } catch (error) {
+      console.error('DynamoDB scan error:', error);
+      return [];
+    }
+  }
+
+  private async dynamoDelete(pk: string, sk: string): Promise<void> {
+    if (!dynamoClient) return;
+    try {
+      await dynamoClient.send(
+        new DeleteCommand({
+          TableName: TABLE_NAME,
+          Key: { pk, sk },
+        })
+      );
+    } catch (error) {
+      console.error('DynamoDB delete error:', error);
+      throw error;
+    }
+  }
+
+  // File system methods (fallback for local development)
   private getFilePath(file: string): string {
     return path.join(DATA_DIR, `${file}.json`);
   }
@@ -89,22 +185,36 @@ class Database {
   }
 
   // Players
-  getPlayers(): Player[] {
+  async getPlayers(): Promise<Player[]> {
+    if (USE_DYNAMODB) {
+      return this.dynamoQuery<Player>('PLAYER');
+    }
     return this.readFile<Player[]>('players', []);
   }
 
-  getPlayer(id: string): Player | null {
-    const players = this.getPlayers();
+  async getPlayer(id: string): Promise<Player | null> {
+    if (USE_DYNAMODB) {
+      return this.dynamoGet<Player>('PLAYER', id);
+    }
+    const players = await this.getPlayers();
     return players.find(p => p.id === id) || null;
   }
 
-  getPlayerByName(name: string): Player | null {
-    const players = this.getPlayers();
+  async getPlayerByName(name: string): Promise<Player | null> {
+    if (USE_DYNAMODB) {
+      const players = await this.getPlayers();
+      return players.find(p => p.name.toLowerCase() === name.toLowerCase()) || null;
+    }
+    const players = await this.getPlayers();
     return players.find(p => p.name.toLowerCase() === name.toLowerCase()) || null;
   }
 
-  savePlayer(player: Player): void {
-    const players = this.getPlayers();
+  async savePlayer(player: Player): Promise<void> {
+    if (USE_DYNAMODB) {
+      await this.dynamoPut('PLAYER', player.id, player);
+      return;
+    }
+    const players = await this.getPlayers();
     const index = players.findIndex(p => p.id === player.id);
     if (index >= 0) {
       players[index] = player;
@@ -115,17 +225,27 @@ class Database {
   }
 
   // Positions
-  getPositions(): Position[] {
+  async getPositions(): Promise<Position[]> {
+    if (USE_DYNAMODB) {
+      return this.dynamoQuery<Position>('POSITION');
+    }
     return this.readFile<Position[]>('positions', []);
   }
 
-  getPlayerPositions(playerId: string): Position[] {
-    const positions = this.getPositions();
+  async getPlayerPositions(playerId: string): Promise<Position[]> {
+    if (USE_DYNAMODB) {
+      return this.dynamoQuery<Position>('POSITION', `PLAYER#${playerId}#`);
+    }
+    const positions = await this.getPositions();
     return positions.filter(p => p.playerId === playerId);
   }
 
-  savePosition(position: Position): void {
-    const positions = this.getPositions();
+  async savePosition(position: Position): Promise<void> {
+    if (USE_DYNAMODB) {
+      await this.dynamoPut('POSITION', `PLAYER#${position.playerId}#${position.id}`, position);
+      return;
+    }
+    const positions = await this.getPositions();
     const index = positions.findIndex(p => p.id === position.id);
     if (index >= 0) {
       positions[index] = position;
@@ -135,40 +255,80 @@ class Database {
     this.writeFile('positions', positions);
   }
 
-  deletePosition(positionId: string): void {
-    const positions = this.getPositions();
+  async deletePosition(positionId: string): Promise<void> {
+    if (USE_DYNAMODB) {
+      // Need to find the position first to get playerId
+      const positions = await this.getPositions();
+      const position = positions.find(p => p.id === positionId);
+      if (position) {
+        await this.dynamoDelete('POSITION', `PLAYER#${position.playerId}#${positionId}`);
+      }
+      return;
+    }
+    const positions = await this.getPositions();
     const filtered = positions.filter(p => p.id !== positionId);
     this.writeFile('positions', filtered);
   }
 
   // Transactions
-  getTransactions(): Transaction[] {
+  async getTransactions(): Promise<Transaction[]> {
+    if (USE_DYNAMODB) {
+      return this.dynamoQuery<Transaction>('TRANSACTION');
+    }
     return this.readFile<Transaction[]>('transactions', []);
   }
 
-  getPlayerTransactions(playerId: string): Transaction[] {
-    const transactions = this.getTransactions();
+  async getPlayerTransactions(playerId: string): Promise<Transaction[]> {
+    if (USE_DYNAMODB) {
+      return this.dynamoQuery<Transaction>('TRANSACTION', `PLAYER#${playerId}#`);
+    }
+    const transactions = await this.getTransactions();
     return transactions.filter(t => t.playerId === playerId);
   }
 
-  saveTransaction(transaction: Transaction): void {
-    const transactions = this.getTransactions();
+  async saveTransaction(transaction: Transaction): Promise<void> {
+    if (USE_DYNAMODB) {
+      await this.dynamoPut('TRANSACTION', `PLAYER#${transaction.playerId}#${transaction.id}`, transaction);
+      return;
+    }
+    const transactions = await this.getTransactions();
     transactions.push(transaction);
     this.writeFile('transactions', transactions);
   }
 
   // Stock Prices
-  getStockPrices(): Record<string, StockPrice> {
+  async getStockPrices(): Promise<Record<string, StockPrice>> {
+    if (USE_DYNAMODB) {
+      const prices = await this.dynamoQuery<StockPrice>('STOCK_PRICE');
+      const result: Record<string, StockPrice> = {};
+      prices.forEach(price => {
+        result[price.symbol] = price;
+      });
+      return result;
+    }
     return this.readFile<Record<string, StockPrice>>('stockPrices', {});
   }
 
-  getStockPrice(symbol: string): number | null {
-    const prices = this.getStockPrices();
+  async getStockPrice(symbol: string): Promise<number | null> {
+    if (USE_DYNAMODB) {
+      const price = await this.dynamoGet<StockPrice>('STOCK_PRICE', symbol);
+      return price?.price || null;
+    }
+    const prices = await this.getStockPrices();
     return prices[symbol]?.price || null;
   }
 
-  saveStockPrice(symbol: string, price: number): void {
-    const prices = this.getStockPrices();
+  async saveStockPrice(symbol: string, price: number): Promise<void> {
+    if (USE_DYNAMODB) {
+      const stockPrice: StockPrice = {
+        symbol,
+        price,
+        lastUpdated: new Date().toISOString(),
+      };
+      await this.dynamoPut('STOCK_PRICE', symbol, stockPrice);
+      return;
+    }
+    const prices = await this.getStockPrices();
     prices[symbol] = {
       symbol,
       price,
@@ -177,23 +337,39 @@ class Database {
     this.writeFile('stockPrices', prices);
   }
 
-  saveStockPrices(prices: Record<string, StockPrice>): void {
+  async saveStockPrices(prices: Record<string, StockPrice>): Promise<void> {
+    if (USE_DYNAMODB) {
+      for (const [symbol, price] of Object.entries(prices)) {
+        await this.dynamoPut('STOCK_PRICE', symbol, price);
+      }
+      return;
+    }
     this.writeFile('stockPrices', prices);
   }
 
-  // Initial Positions (for P&L tracking based on starting positions)
-  getInitialPositions(): InitialPosition[] {
+  // Initial Positions
+  async getInitialPositions(): Promise<InitialPosition[]> {
+    if (USE_DYNAMODB) {
+      return this.dynamoQuery<InitialPosition>('INITIAL_POSITION');
+    }
     return this.readFile<InitialPosition[]>('initialPositions', []);
   }
 
-  getPlayerInitialPositions(playerId: string): InitialPosition[] {
-    const positions = this.getInitialPositions();
+  async getPlayerInitialPositions(playerId: string): Promise<InitialPosition[]> {
+    if (USE_DYNAMODB) {
+      return this.dynamoQuery<InitialPosition>('INITIAL_POSITION', `PLAYER#${playerId}#`);
+    }
+    const positions = await this.getInitialPositions();
     return positions.filter(p => p.playerId === playerId);
   }
 
-  saveInitialPosition(position: InitialPosition): void {
-    const positions = this.getInitialPositions();
-    // Remove any existing initial position for this player/symbol
+  async saveInitialPosition(position: InitialPosition): Promise<void> {
+    if (USE_DYNAMODB) {
+      const sk = `PLAYER#${position.playerId}#${position.symbol}`;
+      await this.dynamoPut('INITIAL_POSITION', sk, position);
+      return;
+    }
+    const positions = await this.getInitialPositions();
     const filtered = positions.filter(
       p => !(p.playerId === position.playerId && p.symbol === position.symbol)
     );
@@ -201,25 +377,42 @@ class Database {
     this.writeFile('initialPositions', filtered);
   }
 
-  clearPlayerInitialPositions(playerId: string): void {
-    const positions = this.getInitialPositions();
+  async clearPlayerInitialPositions(playerId: string): Promise<void> {
+    if (USE_DYNAMODB) {
+      const positions = await this.getPlayerInitialPositions(playerId);
+      for (const pos of positions) {
+        await this.dynamoDelete('INITIAL_POSITION', `PLAYER#${playerId}#${pos.symbol}`);
+      }
+      return;
+    }
+    const positions = await this.getInitialPositions();
     const filtered = positions.filter(p => p.playerId !== playerId);
     this.writeFile('initialPositions', filtered);
   }
 
-  // Portfolio Snapshots (for historical value tracking)
-  getPortfolioSnapshots(): PortfolioSnapshot[] {
+  // Portfolio Snapshots
+  async getPortfolioSnapshots(): Promise<PortfolioSnapshot[]> {
+    if (USE_DYNAMODB) {
+      return this.dynamoQuery<PortfolioSnapshot>('PORTFOLIO_SNAPSHOT');
+    }
     return this.readFile<PortfolioSnapshot[]>('portfolioSnapshots', []);
   }
 
-  getPlayerSnapshots(playerId: string): PortfolioSnapshot[] {
-    const snapshots = this.getPortfolioSnapshots();
+  async getPlayerSnapshots(playerId: string): Promise<PortfolioSnapshot[]> {
+    if (USE_DYNAMODB) {
+      return this.dynamoQuery<PortfolioSnapshot>('PORTFOLIO_SNAPSHOT', `PLAYER#${playerId}#`);
+    }
+    const snapshots = await this.getPortfolioSnapshots();
     return snapshots.filter(s => s.playerId === playerId).sort((a, b) => a.date.localeCompare(b.date));
   }
 
-  savePortfolioSnapshot(snapshot: PortfolioSnapshot): void {
-    const snapshots = this.getPortfolioSnapshots();
-    // Remove any existing snapshot for this player/date
+  async savePortfolioSnapshot(snapshot: PortfolioSnapshot): Promise<void> {
+    if (USE_DYNAMODB) {
+      const sk = `PLAYER#${snapshot.playerId}#${snapshot.date}`;
+      await this.dynamoPut('PORTFOLIO_SNAPSHOT', sk, snapshot);
+      return;
+    }
+    const snapshots = await this.getPortfolioSnapshots();
     const filtered = snapshots.filter(
       s => !(s.playerId === snapshot.playerId && s.date === snapshot.date)
     );
@@ -229,4 +422,3 @@ class Database {
 }
 
 export const db = new Database();
-

@@ -5,13 +5,13 @@ export interface ValidationResult {
   error?: string;
 }
 
-export function validateTrade(
+export async function validateTrade(
   player: Player,
   symbol: string,
   type: 'BUY' | 'SELL',
   quantity: number,
   price: number
-): ValidationResult {
+): Promise<ValidationResult> {
   // Validate quantity
   if (quantity <= 0 || !Number.isInteger(quantity)) {
     return { valid: false, error: 'Quantity must be a positive integer' };
@@ -31,7 +31,7 @@ export function validateTrade(
     }
 
     // Check if player already owns a different stock
-    const positions = db.getPlayerPositions(player.id);
+    const positions = await db.getPlayerPositions(player.id);
     const otherPositions = positions.filter(p => p.symbol !== symbol);
     
     if (otherPositions.length > 0) {
@@ -42,7 +42,7 @@ export function validateTrade(
     }
   } else if (type === 'SELL') {
     // Check if player owns this stock
-    const positions = db.getPlayerPositions(player.id);
+    const positions = await db.getPlayerPositions(player.id);
     const position = positions.find(p => p.symbol === symbol);
     
     if (!position) {

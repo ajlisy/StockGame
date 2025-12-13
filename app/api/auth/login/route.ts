@@ -53,7 +53,7 @@ export async function GET(request: NextRequest) {
   }
 
   const { db } = await import('@/lib/db');
-  const player = db.getPlayer(playerId);
+  const player = await db.getPlayer(playerId);
 
   if (!player) {
     return NextResponse.json({ authenticated: false });

@@ -9,7 +9,7 @@ export async function GET(request: NextRequest) {
     // If playerId provided, return that player's portfolio
     // Otherwise, return all players' portfolios
     if (playerId) {
-      const player = db.getPlayer(playerId);
+      const player = await db.getPlayer(playerId);
       if (!player) {
         return NextResponse.json(
           { error: 'Player not found' },
@@ -17,8 +17,8 @@ export async function GET(request: NextRequest) {
         );
       }
 
-      const positions = db.getPlayerPositions(playerId);
-      const initialPositions = db.getPlayerInitialPositions(playerId);
+      const positions = await db.getPlayerPositions(playerId);
+      const initialPositions = await db.getPlayerInitialPositions(playerId);
 
       // Get all symbols from both current and initial positions
       const allSymbols = Array.from(new Set([
@@ -30,9 +30,9 @@ export async function GET(request: NextRequest) {
       const prices = await fetchMultipleStockPrices(allSymbols);
 
       // Update cached prices
-      Object.entries(prices).forEach(([symbol, price]) => {
-        db.saveStockPrice(symbol, price);
-      });
+      for (const [symbol, price] of Object.entries(prices)) {
+        await db.saveStockPrice(symbol, price);
+      }
 
       // Calculate portfolio value based on INITIAL positions for P&L
       let totalValue = player.currentCash || 0;
@@ -81,7 +81,7 @@ export async function GET(request: NextRequest) {
 
       // Save daily snapshot
       const today = new Date().toISOString().split('T')[0];
-      db.savePortfolioSnapshot({
+      await db.savePortfolioSnapshot({
         playerId: player.id,
         date: today,
         totalValue,
@@ -103,9 +103,9 @@ export async function GET(request: NextRequest) {
       });
     } else {
       // Return all players' portfolios
-      const players = db.getPlayers();
-      const allPositions = db.getPositions();
-      const allInitialPositions = db.getInitialPositions();
+      const players = await db.getPlayers();
+      const allPositions = await db.getPositions();
+      const allInitialPositions = await db.getInitialPositions();
 
       const allSymbols = Array.from(new Set([
         ...allPositions.map(p => p.symbol),
@@ -114,11 +114,11 @@ export async function GET(request: NextRequest) {
 
       // Fetch all stock prices
       const prices = await fetchMultipleStockPrices(allSymbols);
-      Object.entries(prices).forEach(([symbol, price]) => {
-        db.saveStockPrice(symbol, price);
-      });
+      for (const [symbol, price] of Object.entries(prices)) {
+        await db.saveStockPrice(symbol, price);
+      }
 
-      const portfolios = players.map(player => {
+      const portfolios = await Promise.all(players.map(async (player) => {
         const positions = allPositions.filter(p => p.playerId === player.id);
         const initialPositions = allInitialPositions.filter(p => p.playerId === player.id);
 
@@ -163,7 +163,7 @@ export async function GET(request: NextRequest) {
 
         // Save daily snapshot
         const today = new Date().toISOString().split('T')[0];
-        db.savePortfolioSnapshot({
+        await db.savePortfolioSnapshot({
           playerId: player.id,
           date: today,
           totalValue,
@@ -183,7 +183,7 @@ export async function GET(request: NextRequest) {
         },
         positions: stockDetails,
         };
-      });
+      }));
 
       return NextResponse.json({ portfolios });
     }

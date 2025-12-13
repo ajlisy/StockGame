@@ -13,7 +13,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const player = db.getPlayer(playerId);
+    const player = await db.getPlayer(playerId);
     if (!player) {
       return NextResponse.json(
         { error: 'Player not found' },
@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
 
     // Update password
     player.passwordHash = await hashPassword(newPassword);
-    db.savePlayer(player);
+    await db.savePlayer(player);
 
     return NextResponse.json({ success: true, message: 'Password updated successfully' });
   } catch (error) {

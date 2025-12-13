@@ -9,12 +9,12 @@ export async function GET(request: NextRequest) {
 
     if (symbol) {
       // Fetch single stock price
-      let price = db.getStockPrice(symbol);
+      let price = await db.getStockPrice(symbol);
       
       if (!price) {
         price = await fetchStockPrice(symbol);
         if (price) {
-          db.saveStockPrice(symbol, price);
+          await db.saveStockPrice(symbol, price);
         }
       }
 
@@ -32,9 +32,9 @@ export async function GET(request: NextRequest) {
       const prices = await fetchMultipleStockPrices(symbolList);
       
       // Update cache
-      Object.entries(prices).forEach(([symbol, price]) => {
-        db.saveStockPrice(symbol, price);
-      });
+      for (const [symbol, price] of Object.entries(prices)) {
+        await db.saveStockPrice(symbol, price);
+      }
 
       return NextResponse.json({ prices });
     } else {
