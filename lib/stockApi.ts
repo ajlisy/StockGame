@@ -13,7 +13,7 @@ export interface HistoricalPrice {
   price: number;
 }
 
-// Fetch historical prices for a stock (last 5 trading days)
+// Fetch historical prices for a stock (last N trading days)
 export async function fetchHistoricalPrices(symbol: string, days: number = 5): Promise<HistoricalPrice[]> {
   try {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol.toUpperCase()}?interval=1d&range=7d`;
@@ -44,6 +44,51 @@ export async function fetchHistoricalPrices(symbol: string, days: number = 5): P
         const date = new Date(timestamps[i] * 1000);
         historicalPrices.push({
           date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+          price: closes[i],
+        });
+      }
+    }
+
+    return historicalPrices;
+  } catch (error) {
+    console.error(`Error fetching historical prices for ${symbol}:`, error);
+    return [];
+  }
+}
+
+// Fetch historical prices with ISO date format for portfolio calculations
+export async function fetchHistoricalPricesWithDates(symbol: string, range: string = '1mo'): Promise<{ date: string; price: number }[]> {
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol.toUpperCase()}?interval=1d&range=${range}`;
+
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+      },
+    });
+
+    if (!response.ok) {
+      console.error(`Failed to fetch historical data for ${symbol}: ${response.statusText}`);
+      return [];
+    }
+
+    const data = await response.json();
+
+    if (!data.chart?.result?.[0]?.timestamp || !data.chart?.result?.[0]?.indicators?.quote?.[0]?.close) {
+      return [];
+    }
+
+    const timestamps = data.chart.result[0].timestamp;
+    const closes = data.chart.result[0].indicators.quote[0].close;
+
+    const historicalPrices: { date: string; price: number }[] = [];
+    for (let i = 0; i < timestamps.length; i++) {
+      if (closes[i] !== null && closes[i] !== undefined) {
+        const date = new Date(timestamps[i] * 1000);
+        // Use ISO date format (YYYY-MM-DD) for easier comparison
+        const isoDate = date.toISOString().split('T')[0];
+        historicalPrices.push({
+          date: isoDate,
           price: closes[i],
         });
       }

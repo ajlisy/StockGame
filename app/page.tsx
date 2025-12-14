@@ -47,7 +47,7 @@ export default function Home() {
   useEffect(() => {
     checkAuth();
     fetchPortfolios();
-    const interval = setInterval(fetchPortfolios, 30000);
+    const interval = setInterval(fetchPortfolios, 300000); // Refresh every 5 minutes
     return () => clearInterval(interval);
   }, []);
 

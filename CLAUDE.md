@@ -186,3 +186,4 @@ Three validation checks (lib/validation.ts):
 - `AWS_REGION`: AWS region (e.g., `us-east-1`)
 - `DYNAMODB_TABLE_NAME`: DynamoDB table name (e.g., `stock-competition`)
 - `ANTHROPIC_API_KEY`: API key for Claude AI news analysis (optional)
+- do not commit and push unless I tell you to

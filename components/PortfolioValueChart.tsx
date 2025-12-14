@@ -29,23 +29,8 @@ export default function PortfolioValueChart({ playerId, startingCash }: Portfoli
       const response = await fetch(`/api/portfolio/history?playerId=${playerId}`);
       const data = await response.json();
 
-      if (data.snapshots) {
-        // Add starting point (Dec 7) if not present
-        const hasStartingPoint = data.snapshots.some((s: Snapshot) => s.date === '2024-12-07');
-
-        const allSnapshots = hasStartingPoint
-          ? data.snapshots
-          : [
-              {
-                date: '2024-12-07',
-                totalValue: startingCash,
-                totalGainLoss: 0,
-                totalGainLossPercent: 0,
-              },
-              ...data.snapshots,
-            ];
-
-        setSnapshots(allSnapshots);
+      if (data.snapshots && data.snapshots.length > 0) {
+        setSnapshots(data.snapshots);
       }
     } catch (error) {
       console.error('Error fetching portfolio history:', error);
@@ -101,7 +86,7 @@ export default function PortfolioValueChart({ playerId, startingCash }: Portfoli
     <div>
       <div className="flex items-center justify-between mb-3">
         <h4 className="text-sm font-semibold text-[#71767b] uppercase tracking-wider">
-          Portfolio Value Since Dec 7th
+          Portfolio Value History
         </h4>
         <div className="flex gap-1 bg-[#2f3336] rounded-lg p-0.5">
           <button

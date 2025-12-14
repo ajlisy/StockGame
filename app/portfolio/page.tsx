@@ -17,7 +17,7 @@ export default function PortfolioPage() {
       if (player) {
         fetchPortfolio(player.id);
       }
-    }, 30000); // Refresh every 30 seconds
+    }, 300000); // Refresh every 5 minutes
     return () => clearInterval(interval);
   }, [player]);
 
