@@ -24,6 +24,7 @@ interface PortfolioCardProps {
       symbol: string;
       quantity: number;
       purchasePrice: number;
+      purchaseDate?: string;
       currentPrice: number;
       costBasis: number;
       currentValue: number;
@@ -40,12 +41,26 @@ export default function PortfolioCard({ portfolio, isLeader, newsContent }: Port
   const isPositive = player.totalGainLoss >= 0;
   const [historicalData, setHistoricalData] = useState<Record<string, HistoricalPrice[]>>({});
 
+  // Find the earliest purchase date to use as the start date for charts
+  const earliestPurchaseDate = positions.length > 0
+    ? positions
+        .map(p => p.purchaseDate)
+        .filter(Boolean)
+        .sort()[0] || undefined
+    : undefined;
+
   useEffect(() => {
     const fetchHistory = async () => {
       const historyMap: Record<string, HistoricalPrice[]> = {};
       for (const position of positions) {
         try {
-          const response = await fetch(`/api/stocks/history?symbol=${position.symbol}`);
+          // Use the position's purchase date as the start date for the chart
+          const startDate = position.purchaseDate || earliestPurchaseDate;
+          const url = startDate
+            ? `/api/stocks/history?symbol=${position.symbol}&startDate=${encodeURIComponent(startDate)}`
+            : `/api/stocks/history?symbol=${position.symbol}`;
+
+          const response = await fetch(url);
           const data = await response.json();
           if (data.history) {
             historyMap[position.symbol] = data.history;
@@ -60,7 +75,7 @@ export default function PortfolioCard({ portfolio, isLeader, newsContent }: Port
     if (positions.length > 0) {
       fetchHistory();
     }
-  }, [positions]);
+  }, [positions, earliestPurchaseDate]);
 
   return (
     <div className={`bg-[#16202a] rounded-xl border ${isLeader ? 'border-emerald-500/50 shadow-lg shadow-emerald-500/10' : 'border-[#2f3336]'} overflow-hidden`}>

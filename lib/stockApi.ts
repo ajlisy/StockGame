@@ -57,8 +57,24 @@ export async function fetchHistoricalPrices(symbol: string, days: number = 5): P
 }
 
 // Fetch historical prices with ISO date format for portfolio calculations
-export async function fetchHistoricalPricesWithDates(symbol: string, range: string = '1mo'): Promise<{ date: string; price: number }[]> {
+// startDate should be in YYYY-MM-DD format
+export async function fetchHistoricalPricesWithDates(symbol: string, startDate?: string): Promise<{ date: string; price: number }[]> {
   try {
+    // Calculate the range needed - from startDate to today, plus some buffer
+    let range = '3mo'; // Default to 3 months to cover most cases
+
+    if (startDate) {
+      const start = new Date(startDate);
+      const today = new Date();
+      const daysDiff = Math.ceil((today.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+
+      if (daysDiff <= 7) range = '1mo';
+      else if (daysDiff <= 30) range = '1mo';
+      else if (daysDiff <= 90) range = '3mo';
+      else if (daysDiff <= 180) range = '6mo';
+      else range = '1y';
+    }
+
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol.toUpperCase()}?interval=1d&range=${range}`;
 
     const response = await fetch(url, {
@@ -94,11 +110,45 @@ export async function fetchHistoricalPricesWithDates(symbol: string, range: stri
       }
     }
 
+    // Filter to only include dates on or after startDate if provided
+    if (startDate) {
+      return historicalPrices.filter(p => p.date >= startDate);
+    }
+
     return historicalPrices;
   } catch (error) {
     console.error(`Error fetching historical prices for ${symbol}:`, error);
     return [];
   }
+}
+
+// Helper function to normalize date strings to ISO format (YYYY-MM-DD)
+export function normalizeDate(dateStr: string): string {
+  if (!dateStr) return new Date().toISOString().split('T')[0];
+
+  // If already in ISO format (YYYY-MM-DD), return as is
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    return dateStr;
+  }
+
+  // Try parsing various formats
+  // MM/DD/YYYY or M/D/YYYY
+  const slashMatch = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (slashMatch) {
+    const month = slashMatch[1].padStart(2, '0');
+    const day = slashMatch[2].padStart(2, '0');
+    const year = slashMatch[3];
+    return `${year}-${month}-${day}`;
+  }
+
+  // Try Date.parse as fallback
+  const parsed = new Date(dateStr);
+  if (!isNaN(parsed.getTime())) {
+    return parsed.toISOString().split('T')[0];
+  }
+
+  // Return today's date as last resort
+  return new Date().toISOString().split('T')[0];
 }
 
 // Using Yahoo Finance API (free, no authentication)

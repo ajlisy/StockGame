@@ -56,6 +56,7 @@ export async function GET(request: NextRequest) {
           quantity: currentPos?.quantity || 0, // Current quantity held
           initialQuantity: initialPos.quantity, // Initial quantity from CSV
           purchasePrice: initialPos.purchasePrice,
+          purchaseDate: initialPos.purchaseDate,
           currentPrice: currentPrice || 0,
           costBasis,
           currentValue,
@@ -145,6 +146,7 @@ export async function GET(request: NextRequest) {
             quantity: currentPos?.quantity || 0,
             initialQuantity: initialPos.quantity,
             purchasePrice: initialPos.purchasePrice,
+            purchaseDate: initialPos.purchaseDate,
             currentPrice: currentPrice || 0,
             costBasis,
             currentValue,

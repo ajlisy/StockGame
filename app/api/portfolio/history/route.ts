@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { fetchHistoricalPricesWithDates } from '@/lib/stockApi';
+import { fetchHistoricalPricesWithDates, normalizeDate } from '@/lib/stockApi';
 
 interface DailySnapshot {
   date: string;
@@ -44,20 +44,25 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Find the earliest purchase date
-    const purchaseDates = positions.map(p => p.purchaseDate).filter(Boolean);
+    // Find the earliest purchase date - normalize all dates to ISO format
+    const purchaseDates = positions
+      .map(p => p.purchaseDate ? normalizeDate(p.purchaseDate) : null)
+      .filter((d): d is string => d !== null);
+
     const earliestDate = purchaseDates.length > 0
       ? purchaseDates.sort()[0]
       : new Date().toISOString().split('T')[0];
 
+    console.log(`[Portfolio History] Earliest date: ${earliestDate}, positions: ${positions.length}`);
+
     // Get unique symbols
     const symbols = Array.from(new Set(positions.map(p => p.symbol)));
 
-    // Fetch historical prices for all symbols (1 month range to cover most cases)
+    // Fetch historical prices for all symbols from the earliest date
     const historicalPrices: Record<string, Record<string, number>> = {};
 
     for (const symbol of symbols) {
-      const history = await fetchHistoricalPricesWithDates(symbol, '1mo');
+      const history = await fetchHistoricalPricesWithDates(symbol, earliestDate);
       historicalPrices[symbol] = {};
       for (const h of history) {
         historicalPrices[symbol][h.date] = h.price;
@@ -77,6 +82,8 @@ export async function GET(request: NextRequest) {
       .filter(date => date >= earliestDate)
       .sort();
 
+    console.log(`[Portfolio History] Date range: ${sortedDates[0]} to ${sortedDates[sortedDates.length - 1]}, total days: ${sortedDates.length}`);
+
     // Calculate portfolio value for each date
     const snapshots: DailySnapshot[] = [];
     let lastKnownPrices: Record<string, number> = {};
@@ -85,8 +92,12 @@ export async function GET(request: NextRequest) {
       let stockValue = 0;
 
       for (const position of positions) {
+        // Normalize position date for comparison
+        const positionDate = position.purchaseDate
+          ? normalizeDate(position.purchaseDate)
+          : earliestDate;
+
         // Only include positions that existed on this date
-        const positionDate = position.purchaseDate || earliestDate;
         if (date >= positionDate) {
           // Get price for this date, or use last known price
           let price = historicalPrices[position.symbol]?.[date];
