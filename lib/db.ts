@@ -95,6 +95,15 @@ export interface PortfolioSnapshot {
   totalGainLossPercent: number;
 }
 
+export interface NewsCache {
+  playerId: string;
+  weekSummary: string;
+  weekBullets: string[];
+  todaySummary: string;
+  todayBullets: string[];
+  cachedAt: string; // ISO timestamp when cache was created
+}
+
 class Database {
   // DynamoDB methods
   private async dynamoGet<T>(pk: string, sk: string): Promise<T | null> {
@@ -455,6 +464,25 @@ class Database {
     );
     filtered.push(snapshot);
     this.writeFile('portfolioSnapshots', filtered);
+  }
+
+  // News Cache
+  async getNewsCache(playerId: string): Promise<NewsCache | null> {
+    if (useDynamoDB()) {
+      return this.dynamoGet<NewsCache>('NEWS_CACHE', playerId);
+    }
+    const caches = this.readFile<Record<string, NewsCache>>('newsCache', {});
+    return caches[playerId] || null;
+  }
+
+  async saveNewsCache(cache: NewsCache): Promise<void> {
+    if (useDynamoDB()) {
+      await this.dynamoPut('NEWS_CACHE', cache.playerId, cache);
+      return;
+    }
+    const caches = this.readFile<Record<string, NewsCache>>('newsCache', {});
+    caches[cache.playerId] = cache;
+    this.writeFile('newsCache', caches);
   }
 }
 

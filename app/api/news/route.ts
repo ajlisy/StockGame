@@ -46,9 +46,9 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Check if we have cached news for today (skip if forceRefresh)
+    // Check if we have fresh cached news (skip if forceRefresh)
     if (!forceRefresh) {
-      const cachedNews = getCachedNews(portfolio.player.id);
+      const cachedNews = await getCachedNews(portfolio.player.id);
       if (cachedNews) {
         console.log(`Using cached news for ${portfolio.player.name}`);
         return NextResponse.json({
@@ -125,7 +125,7 @@ Be specific with percentages and dollar amounts from the data provided. Only men
     const newsData = parseClaudeResponse(responseText);
 
     // Cache the results
-    setCachedNews(portfolio.player.id, newsData);
+    await setCachedNews(portfolio.player.id, newsData);
     console.log(`Cached news for ${portfolio.player.name}`);
 
     return NextResponse.json(newsData);

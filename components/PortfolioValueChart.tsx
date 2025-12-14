@@ -126,6 +126,7 @@ export default function PortfolioValueChart({ playerId, startingCash }: Portfoli
               stroke="#71767b"
               style={{ fontSize: '11px' }}
               tick={{ fill: '#71767b' }}
+              domain={[90000, 120000]}
               tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`}
             />
             <Tooltip
