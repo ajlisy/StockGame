@@ -10,7 +10,7 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
 }
 
 export async function authenticatePlayer(name: string, password: string): Promise<Player | null> {
-  const player = db.getPlayerByName(name);
+  const player = await db.getPlayerByName(name);
   if (!player) {
     return null;
   }
