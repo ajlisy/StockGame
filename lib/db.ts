@@ -32,7 +32,10 @@ function getDynamoClient(): DynamoDBDocumentClient | null {
 let dataDir: string | null = null;
 function getDataDir(): string {
   if (!dataDir) {
-    dataDir = path.join(process.cwd(), 'data');
+    // On AWS Lambda, use /tmp/data (only writable directory)
+    // Locally, use ./data in project root
+    const isLambda = !!process.env.AWS_LAMBDA_FUNCTION_NAME;
+    dataDir = isLambda ? '/tmp/data' : path.join(process.cwd(), 'data');
     if (!useDynamoDB() && !fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true });
     }
