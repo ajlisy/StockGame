@@ -24,16 +24,24 @@ mkdir -p data        # Create data directory for JSON storage
 
 ### Data Storage Strategy
 
-**Critical**: The app uses JSON file-based storage with environment-aware paths:
-- **Local development**: `data/` directory in project root
-- **Serverless (AWS Lambda)**: `/tmp/data` (ephemeral - data is lost on Lambda restarts)
-- Logic in `lib/db.ts:6-8` switches based on `AWS_LAMBDA_FUNCTION_NAME` env var
+**Dual storage backends** (lib/db.ts):
 
-Data files stored as JSON:
+1. **DynamoDB** (production): Used when both `AWS_REGION` and `DYNAMODB_TABLE_NAME` env vars are set
+   - Table uses composite keys: `pk` (partition key) and `sk` (sort key)
+   - Entity types: PLAYER, POSITION, TRANSACTION, STOCK_PRICE, INITIAL_POSITION, PORTFOLIO_SNAPSHOT
+
+2. **JSON file-based** (fallback): Used when DynamoDB env vars are not set
+   - **Local development**: `data/` directory in project root
+   - **AWS Lambda without DynamoDB**: `/tmp/data` (ephemeral - lost on cold starts)
+   - Detection logic in `getDataDir()` (lib/db.ts:33-44) checks `AWS_LAMBDA_FUNCTION_NAME`
+
+Data files (when using file storage):
 - `players.json` - player accounts with password hashes (bcrypt), cash balances
 - `positions.json` - current stock holdings per player
 - `transactions.json` - complete trade history
 - `stockPrices.json` - cached stock prices to reduce API calls
+- `initialPositions.json` - original positions from CSV upload for P&L tracking
+- `portfolioSnapshots.json` - historical portfolio values
 
 ### Authentication Flow
 
@@ -98,15 +106,21 @@ Admin page (`/admin`) allows uploading initial positions:
 app/
 ├── page.tsx              # Dashboard with all players' portfolios
 ├── login/page.tsx        # Login form
-├── portfolio/page.tsx    # Individual player portfolio view (unused in current setup)
+├── portfolio/page.tsx    # Individual player portfolio view
 ├── trade/page.tsx        # Trading interface (buy/sell)
 ├── admin/page.tsx        # CSV upload for initial positions
 └── api/
     ├── auth/
-    │   ├── login/route.ts          # POST: authenticate, set cookie
+    │   ├── login/route.ts           # POST: authenticate, set cookie; GET: check session
     │   └── change-password/route.ts # POST: update player password
-    ├── trades/route.ts     # POST: execute buy/sell trade
-    └── stocks/route.ts     # GET: fetch current prices for symbols
+    ├── trades/route.ts      # POST: execute buy/sell trade
+    ├── stocks/route.ts      # GET: fetch current prices for symbols
+    ├── stocks/history/route.ts # GET: fetch historical price data
+    ├── portfolio/route.ts   # GET: fetch all players' portfolio data
+    ├── portfolio/history/route.ts # GET: fetch portfolio snapshots over time
+    ├── upload/route.ts      # POST: CSV upload for initial positions
+    ├── news/route.ts        # POST: AI-generated portfolio news analysis
+    └── debug/route.ts       # GET: check storage mode and DynamoDB connection
 ```
 
 ## Key Implementation Details
@@ -141,15 +155,16 @@ Three validation checks (lib/validation.ts):
 
 ### Environment-Specific Behavior
 
-Code automatically detects AWS Lambda via `process.env.AWS_LAMBDA_FUNCTION_NAME` and switches data directory. No configuration needed.
+- DynamoDB is used when both `AWS_REGION` and `DYNAMODB_TABLE_NAME` are set
+- Otherwise, file storage is used with automatic Lambda detection via `AWS_LAMBDA_FUNCTION_NAME`
+- Debug endpoint (`/api/debug`) shows current storage mode and tests DynamoDB connection
 
 ## Deployment Notes
 
 **AWS Amplify** (configured in amplify.yml):
 - Uses Next.js SSR on AWS Lambda
-- Data stored in `/tmp` is ephemeral (lost on cold starts)
-- For production, migrate to DynamoDB or external database
-- No build-time environment variables required for basic functionality
+- Set `AWS_REGION` and `DYNAMODB_TABLE_NAME` env vars for persistent DynamoDB storage
+- Without DynamoDB, data in `/tmp` is ephemeral (lost on cold starts)
 
 ## Technology Stack
 
@@ -164,7 +179,10 @@ Code automatically detects AWS Lambda via `process.env.AWS_LAMBDA_FUNCTION_NAME`
 
 ## Environment Variables
 
-Required environment variables in `.env.local`:
-- `ANTHROPIC_API_KEY`: API key for Claude AI news analysis (get from https://console.anthropic.com/)
+**Local development** (`.env.local`):
+- `ANTHROPIC_API_KEY`: API key for Claude AI news analysis (optional - falls back to rule-based analysis)
 
-If `ANTHROPIC_API_KEY` is not set, the news API will fall back to simple rule-based analysis.
+**AWS Amplify** (for DynamoDB persistence):
+- `AWS_REGION`: AWS region (e.g., `us-east-1`)
+- `DYNAMODB_TABLE_NAME`: DynamoDB table name (e.g., `stock-competition`)
+- `ANTHROPIC_API_KEY`: API key for Claude AI news analysis (optional)

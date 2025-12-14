@@ -33,6 +33,7 @@ interface NewsData {
   todaySummary: string;
   todayBullets: string[];
   loading: boolean;
+  cached?: boolean;
 }
 
 export default function Home() {
@@ -82,11 +83,11 @@ export default function Home() {
     }
   };
 
-  const fetchNewsForPlayer = async (portfolio: Portfolio) => {
+  const fetchNewsForPlayer = async (portfolio: Portfolio, forceRefresh = false) => {
     const playerId = portfolio.player.id;
 
-    // Don't refetch if already loaded
-    if (newsData[playerId] && !newsData[playerId].loading) {
+    // Don't refetch if already loaded (unless force refresh)
+    if (!forceRefresh && newsData[playerId] && !newsData[playerId].loading) {
       return;
     }
 
@@ -99,7 +100,7 @@ export default function Home() {
       const response = await fetch('/api/news', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ portfolio }),
+        body: JSON.stringify({ portfolio, forceRefresh }),
       });
       const data = await response.json();
 
@@ -111,7 +112,8 @@ export default function Home() {
           weekBullets: data.weekBullets || [],
           todaySummary: data.todaySummary || '',
           todayBullets: data.todayBullets || [],
-          loading: false
+          loading: false,
+          cached: data.cached || false
         }
       }));
     } catch (error) {
@@ -120,6 +122,13 @@ export default function Home() {
         ...prev,
         [playerId]: { playerId, weekSummary: '', weekBullets: [], todaySummary: '', todayBullets: [], loading: false }
       }));
+    }
+  };
+
+  const refreshNewsForPlayer = (playerId: string) => {
+    const portfolio = portfolios.find(p => p.player.id === playerId);
+    if (portfolio) {
+      fetchNewsForPlayer(portfolio, true);
     }
   };
 
@@ -142,12 +151,41 @@ export default function Home() {
       );
     }
 
-    if (!news.weekSummary && news.weekBullets.length === 0 && !news.todaySummary && news.todayBullets.length === 0) {
-      return null;
+    const hasNoNews = !news.weekSummary && news.weekBullets.length === 0 && !news.todaySummary && news.todayBullets.length === 0;
+
+    if (hasNoNews) {
+      return (
+        <div className="text-center py-2">
+          <p className="text-sm text-[#71767b] mb-2">No AI analysis available</p>
+          <button
+            onClick={() => refreshNewsForPlayer(playerId)}
+            className="text-sm text-emerald-400 hover:text-emerald-300 transition-colors flex items-center gap-1 mx-auto"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            Generate AI Analysis
+          </button>
+        </div>
+      );
     }
 
     return (
       <div className="space-y-4">
+        {/* Header with refresh button */}
+        <div className="flex justify-end">
+          <button
+            onClick={() => refreshNewsForPlayer(playerId)}
+            className="text-xs text-[#71767b] hover:text-emerald-400 transition-colors flex items-center gap-1"
+            title="Refresh AI analysis"
+          >
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            Refresh
+          </button>
+        </div>
+
         {/* This Week Section */}
         {(news.weekSummary || news.weekBullets.length > 0) && (
           <div>

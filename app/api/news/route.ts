@@ -35,7 +35,7 @@ interface HistoricalPrice {
 
 export async function POST(request: NextRequest) {
   try {
-    const { portfolio } = await request.json() as { portfolio: Portfolio };
+    const { portfolio, forceRefresh } = await request.json() as { portfolio: Portfolio; forceRefresh?: boolean };
 
     if (!portfolio || !portfolio.positions || portfolio.positions.length === 0) {
       return NextResponse.json({
@@ -46,20 +46,25 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Check if we have cached news for today
-    const cachedNews = getCachedNews(portfolio.player.id);
-    if (cachedNews) {
-      console.log(`Using cached news for ${portfolio.player.name}`);
-      return NextResponse.json({
-        weekSummary: cachedNews.weekSummary,
-        weekBullets: cachedNews.weekBullets,
-        todaySummary: cachedNews.todaySummary,
-        todayBullets: cachedNews.todayBullets,
-      });
+    // Check if we have cached news for today (skip if forceRefresh)
+    if (!forceRefresh) {
+      const cachedNews = getCachedNews(portfolio.player.id);
+      if (cachedNews) {
+        console.log(`Using cached news for ${portfolio.player.name}`);
+        return NextResponse.json({
+          weekSummary: cachedNews.weekSummary,
+          weekBullets: cachedNews.weekBullets,
+          todaySummary: cachedNews.todaySummary,
+          todayBullets: cachedNews.todayBullets,
+          cached: true,
+        });
+      }
+    } else {
+      console.log(`Force refreshing news for ${portfolio.player.name}`);
     }
 
-    // Check if it's after market close (3:30 PM EST)
-    if (!shouldGenerateNews()) {
+    // Check if it's after market close (3:30 PM EST) - skip check if forceRefresh
+    if (!forceRefresh && !shouldGenerateNews()) {
       console.log('Market not closed yet. Using fallback news.');
       return generateFallbackNews(portfolio);
     }

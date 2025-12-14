@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, PutCommand, GetCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, PutCommand, GetCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 
 export async function GET() {
   const config = {
@@ -28,10 +28,28 @@ export async function GET() {
         Key: { pk: 'TEST', sk: 'connection-test' },
       }));
 
+      // Count items by type
+      const scanResult = await docClient.send(new ScanCommand({
+        TableName: process.env.DYNAMODB_TABLE_NAME!,
+        Select: 'COUNT',
+      }));
+
+      // Get sample of actual data
+      const dataSample = await docClient.send(new ScanCommand({
+        TableName: process.env.DYNAMODB_TABLE_NAME!,
+        Limit: 20,
+      }));
+
       return NextResponse.json({
         ...config,
         dynamoDBTest: 'SUCCESS',
         testItem: result.Item,
+        totalItems: scanResult.Count,
+        dataSample: dataSample.Items?.map(item => ({
+          pk: item.pk,
+          sk: item.sk,
+          dataPreview: typeof item.data === 'object' ? Object.keys(item.data) : item.data,
+        })),
       });
     } catch (error: any) {
       return NextResponse.json({
