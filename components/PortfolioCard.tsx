@@ -123,8 +123,19 @@ export default function PortfolioCard({ portfolio, isLeader, newsContent }: Port
           <h3 className="text-sm font-semibold text-[#71767b] uppercase tracking-wider mb-3">Holdings</h3>
           <div className="space-y-4">
             {positions.map((position) => {
-              const posIsPositive = position.gainLoss >= 0;
+              const totalIsPositive = position.gainLoss >= 0;
               const chartData = historicalData[position.symbol] || [];
+
+              // Calculate today's change from historical data
+              let todayChange = 0;
+              let todayChangePercent = 0;
+              if (chartData.length >= 2) {
+                const todayPrice = chartData[chartData.length - 1]?.price || position.currentPrice;
+                const yesterdayPrice = chartData[chartData.length - 2]?.price || todayPrice;
+                todayChange = (todayPrice - yesterdayPrice) * position.quantity;
+                todayChangePercent = yesterdayPrice !== 0 ? ((todayPrice - yesterdayPrice) / yesterdayPrice) * 100 : 0;
+              }
+              const todayIsPositive = todayChange >= 0;
 
               return (
                 <div key={position.symbol} className="bg-[#1d2a35] rounded-lg p-4">
@@ -132,8 +143,8 @@ export default function PortfolioCard({ portfolio, isLeader, newsContent }: Port
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="font-bold text-white text-lg">{position.symbol}</span>
-                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${posIsPositive ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}>
-                          {posIsPositive ? '+' : ''}{(position.gainLossPercent != null ? position.gainLossPercent : 0).toFixed(2)}%
+                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${totalIsPositive ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}>
+                          {totalIsPositive ? '+' : ''}{(position.gainLossPercent != null ? position.gainLossPercent : 0).toFixed(2)}% total
                         </span>
                       </div>
                       <div className="text-sm text-[#71767b] mt-1">
@@ -144,14 +155,19 @@ export default function PortfolioCard({ portfolio, isLeader, newsContent }: Port
                       <div className="font-semibold text-white">
                         ${position.currentValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </div>
-                      <div className={`text-sm ${posIsPositive ? 'text-emerald-400' : 'text-red-400'}`}>
-                        {posIsPositive ? '+' : ''}${(position.gainLoss || 0).toFixed(2)}
+                      {/* Today's P&L */}
+                      <div className={`text-xs ${todayIsPositive ? 'text-emerald-400' : 'text-red-400'}`}>
+                        Today: {todayIsPositive ? '+' : ''}${todayChange.toFixed(2)} ({todayIsPositive ? '+' : ''}{todayChangePercent.toFixed(2)}%)
+                      </div>
+                      {/* Total P&L */}
+                      <div className={`text-sm ${totalIsPositive ? 'text-emerald-400' : 'text-red-400'}`}>
+                        Total: {totalIsPositive ? '+' : ''}${(position.gainLoss || 0).toFixed(2)}
                       </div>
                     </div>
                   </div>
                   {/* Stock Chart */}
                   <div className="mt-2">
-                    <StockChart data={chartData} isPositive={posIsPositive} height={60} />
+                    <StockChart data={chartData} isPositive={totalIsPositive} height={60} />
                   </div>
                 </div>
               );
