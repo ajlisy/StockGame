@@ -4,9 +4,14 @@ import fs from 'fs';
 import path from 'path';
 
 // Use DynamoDB in production (AWS), file system in local development
-const USE_DYNAMODB = process.env.AWS_REGION && process.env.DYNAMODB_TABLE_NAME;
+const USE_DYNAMODB = !!(process.env.AWS_REGION && process.env.DYNAMODB_TABLE_NAME);
 const TABLE_NAME = process.env.DYNAMODB_TABLE_NAME || 'stock-competition';
 const REGION = process.env.AWS_REGION || 'us-east-1';
+
+// Log storage mode for debugging
+console.log(`[DB] Storage mode: ${USE_DYNAMODB ? 'DynamoDB' : 'File System'}`);
+console.log(`[DB] AWS_REGION: ${process.env.AWS_REGION || 'not set'}`);
+console.log(`[DB] DYNAMODB_TABLE_NAME: ${process.env.DYNAMODB_TABLE_NAME || 'not set'}`);
 
 // Initialize DynamoDB client
 let dynamoClient: DynamoDBDocumentClient | null = null;
