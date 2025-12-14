@@ -6,7 +6,7 @@ import Link from 'next/link';
 export default function AdminPage() {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [message, setMessage] = useState<{ type: 'success' | 'error' | 'warning'; text: string; details?: any } | null>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -37,17 +37,67 @@ export default function AdminPage() {
       const data = await response.json();
 
       if (!response.ok) {
-        setMessage({ type: 'error', text: data.error || 'Upload failed' });
+        let errorText = data.error || 'Upload failed';
+        if (data.details) {
+          errorText += `: ${data.details}`;
+        }
+        if (data.errors && Array.isArray(data.errors)) {
+          errorText += `\n\nErrors:\n${data.errors.map((e: string) => `• ${e}`).join('\n')}`;
+        }
+        if (data.skippedRows && data.skippedRows.length > 0) {
+          errorText += `\n\nSkipped ${data.skippedRows.length} row(s). First few:\n${data.skippedRows.slice(0, 5).map((r: any) => `  Row ${r.row}: ${r.reason}`).join('\n')}`;
+        }
+        setMessage({ 
+          type: 'error', 
+          text: errorText,
+          details: data
+        });
         setLoading(false);
         return;
       }
 
-      setMessage({ type: 'success', text: data.message || 'Upload successful!' });
+      // Handle partial success (207 status)
+      if (response.status === 207 || data.errors) {
+        let warningText = data.message || 'Upload completed with warnings';
+        if (data.errors && Array.isArray(data.errors)) {
+          warningText += `\n\nErrors:\n${data.errors.map((e: string) => `• ${e}`).join('\n')}`;
+        }
+        if (data.skippedRows && data.skippedRows.length > 0) {
+          warningText += `\n\nSkipped ${data.skippedRows.length} row(s).`;
+        }
+        setMessage({ 
+          type: 'warning', 
+          text: warningText,
+          details: data
+        });
+      } else {
+        let successText = data.message || 'Upload successful!';
+        if (data.stats) {
+          successText += `\n\nStats:\n• Processed: ${data.stats.processedRows} rows\n• Players: ${data.stats.playersCreated} created, ${data.stats.playersUpdated} updated`;
+          if (data.stats.skippedRows > 0) {
+            successText += `\n• Skipped: ${data.stats.skippedRows} rows`;
+          }
+        }
+        if (data.skippedRows && data.skippedRows.length > 0) {
+          successText += `\n\nNote: ${data.skippedRows.length} row(s) were skipped.`;
+        }
+        setMessage({ 
+          type: 'success', 
+          text: successText,
+          details: data
+        });
+      }
+      
       setFile(null);
       const fileInput = document.getElementById('csv-file') as HTMLInputElement;
       if (fileInput) fileInput.value = '';
-    } catch (error) {
-      setMessage({ type: 'error', text: 'Network error. Please try again.' });
+    } catch (error: any) {
+      const errorMessage = error?.message || 'Network error. Please try again.';
+      setMessage({ 
+        type: 'error', 
+        text: errorMessage,
+        details: { networkError: true, originalError: error?.toString() }
+      });
     } finally {
       setLoading(false);
     }
@@ -128,11 +178,23 @@ Jane, GOOGL, 8, 140.75, 2024-12-07`}
                   <div className={`p-4 rounded-lg ${
                     message.type === 'success'
                       ? 'bg-emerald-500/10 border border-emerald-500/20'
+                      : message.type === 'warning'
+                      ? 'bg-amber-500/10 border border-amber-500/20'
                       : 'bg-red-500/10 border border-red-500/20'
                   }`}>
-                    <p className={`text-sm ${message.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>
-                      {message.text}
-                    </p>
+                    <div className={`text-sm ${message.type === 'success' ? 'text-emerald-400' : message.type === 'warning' ? 'text-amber-400' : 'text-red-400'}`}>
+                      <p className="whitespace-pre-line font-medium">{message.text}</p>
+                      {message.details && process.env.NODE_ENV === 'development' && (
+                        <details className="mt-3">
+                          <summary className="cursor-pointer text-xs opacity-75 hover:opacity-100">
+                            Show debug details
+                          </summary>
+                          <pre className="mt-2 text-xs bg-black/20 p-2 rounded overflow-auto max-h-60">
+                            {JSON.stringify(message.details, null, 2)}
+                          </pre>
+                        </details>
+                      )}
+                    </div>
                   </div>
                 )}
 
