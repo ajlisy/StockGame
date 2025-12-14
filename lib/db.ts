@@ -213,7 +213,9 @@ class Database {
 
   // Players
   async getPlayers(): Promise<Player[]> {
-    if (useDynamoDB()) {
+    const dynamo = useDynamoDB();
+    console.log(`[DB] getPlayers - useDynamoDB: ${dynamo}, AWS_REGION: ${process.env.AWS_REGION}, DYNAMODB_TABLE_NAME: ${process.env.DYNAMODB_TABLE_NAME}`);
+    if (dynamo) {
       return this.dynamoQuery<Player>('PLAYER');
     }
     return this.readFile<Player[]>('players', []);
@@ -237,10 +239,14 @@ class Database {
   }
 
   async savePlayer(player: Player): Promise<void> {
-    if (useDynamoDB()) {
+    const dynamo = useDynamoDB();
+    console.log(`[DB] savePlayer - useDynamoDB: ${dynamo}, player: ${player.name}`);
+    if (dynamo) {
+      console.log(`[DB] savePlayer - Writing to DynamoDB: pk=PLAYER, sk=${player.id}`);
       await this.dynamoPut('PLAYER', player.id, player);
       return;
     }
+    console.log(`[DB] savePlayer - Writing to file system`);
     const players = await this.getPlayers();
     const index = players.findIndex(p => p.id === player.id);
     if (index >= 0) {
@@ -268,10 +274,14 @@ class Database {
   }
 
   async savePosition(position: Position): Promise<void> {
-    if (useDynamoDB()) {
+    const dynamo = useDynamoDB();
+    console.log(`[DB] savePosition - useDynamoDB: ${dynamo}, symbol: ${position.symbol}`);
+    if (dynamo) {
+      console.log(`[DB] savePosition - Writing to DynamoDB: pk=POSITION, sk=PLAYER#${position.playerId}#${position.id}`);
       await this.dynamoPut('POSITION', `PLAYER#${position.playerId}#${position.id}`, position);
       return;
     }
+    console.log(`[DB] savePosition - Writing to file system`);
     const positions = await this.getPositions();
     const index = positions.findIndex(p => p.id === position.id);
     if (index >= 0) {
