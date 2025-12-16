@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, Player, Position, InitialPosition } from '@/lib/db';
+import { db, Player } from '@/lib/db';
 import { hashPassword } from '@/lib/auth';
+import { createCashDeposit, createInitialPosition, clearPlayerLedgerData, recalculatePlayerSummary } from '@/lib/ledger';
 import Papa from 'papaparse';
 
 // Expected CSV format: Player, Symbol, Quantity, PurchasePrice, Date
@@ -10,6 +11,13 @@ interface CSVRow {
   Quantity: string;
   PurchasePrice: string;
   Date: string;
+}
+
+interface PositionData {
+  symbol: string;
+  quantity: number;
+  purchasePrice: number;
+  purchaseDate: string;
 }
 
 export async function POST(request: NextRequest) {
@@ -25,7 +33,7 @@ export async function POST(request: NextRequest) {
     }
 
     const text = await file.text();
-    
+
     return new Promise<NextResponse>((resolve) => {
       Papa.parse<CSVRow>(text, {
         header: true,
@@ -33,7 +41,7 @@ export async function POST(request: NextRequest) {
         complete: async (results) => {
           try {
             const rows = results.data;
-            const playersMap = new Map<string, { positions: Position[], totalCost: number, cash: number }>();
+            const playersMap = new Map<string, { positions: PositionData[], totalCost: number, cash: number }>();
             const skippedRows: Array<{ row: number; reason: string; data: any }> = [];
             let processedRows = 0;
 
@@ -48,7 +56,7 @@ export async function POST(request: NextRequest) {
               const purchasePriceStr = row.PurchasePrice?.trim() || '0';
               const quantity = parseInt(quantityStr);
               const purchasePrice = parseFloat(purchasePriceStr);
-              const date = row.Date?.trim() || '2024-12-07';
+              const date = row.Date?.trim() || new Date().toISOString().split('T')[0];
 
               // Validate row
               if (!playerName) {
@@ -80,23 +88,19 @@ export async function POST(request: NextRequest) {
               if (symbol === '$CASH') {
                 const cashAmount = quantity * purchasePrice;
                 playerData.cash = cashAmount;
-                playerData.totalCost += cashAmount; // Cash counts toward initial total value
-                continue; // Don't create a position for cash
+                playerData.totalCost += cashAmount;
+                continue;
               }
 
               const cost = quantity * purchasePrice;
               playerData.totalCost += cost;
 
-              const position: Position = {
-                id: `${Date.now()}-${Math.random()}-${symbol}`,
-                playerId: '', // Will be set after player is created
+              playerData.positions.push({
                 symbol,
                 quantity,
                 purchasePrice,
                 purchaseDate: date,
-                createdAt: new Date().toISOString(),
-              };
-              playerData.positions.push(position);
+              });
             }
 
             console.log(`Processed ${processedRows} valid rows, skipped ${skippedRows.length} rows`);
@@ -106,7 +110,7 @@ export async function POST(request: NextRequest) {
 
             if (playersMap.size === 0) {
               resolve(NextResponse.json(
-                { 
+                {
                   error: 'No valid data found in CSV. Please check the format and ensure all required fields are present.',
                   details: skippedRows.length > 0 ? `Skipped ${skippedRows.length} rows. First few: ${JSON.stringify(skippedRows.slice(0, 3))}` : 'No rows could be processed.'
                 },
@@ -115,7 +119,7 @@ export async function POST(request: NextRequest) {
               return;
             }
 
-            // Create or update players and positions
+            // Create or update players and ledger entries
             const createdPlayers: string[] = [];
             const cashReport: Record<string, { initialTotalValue: number; stockValue: number; cash: number }> = {};
             const errors: string[] = [];
@@ -125,76 +129,66 @@ export async function POST(request: NextRequest) {
                 console.log(`Processing player: ${playerName}`);
                 let player = await db.getPlayerByName(playerName);
 
-              // Starting cash = total initial value (all stock positions + cash)
-              const initialTotalValue = playerData.totalCost;
-              const stockValue = initialTotalValue - playerData.cash;
-              const currentCash = playerData.cash;
+                const initialTotalValue = playerData.totalCost;
+                const stockValue = initialTotalValue - playerData.cash;
+                const currentCash = playerData.cash;
 
-              cashReport[playerName] = {
-                initialTotalValue: initialTotalValue,
-                stockValue: stockValue,
-                cash: currentCash
-              };
-
-              console.log(`${playerName}: Initial Total Value $${initialTotalValue.toFixed(2)} (Stocks: $${stockValue.toFixed(2)}, Cash: $${currentCash.toFixed(2)})`);
-
-              if (!player) {
-                // Create new player with default password
-                const defaultPassword = await hashPassword('changeme');
-                player = {
-                  id: `player-${Date.now()}-${Math.random()}`,
-                  name: playerName,
-                  passwordHash: defaultPassword,
-                  startingCash: initialTotalValue, // Total initial value (stocks + cash)
-                  currentCash: currentCash, // Cash position from CSV
-                  createdAt: new Date().toISOString(),
+                cashReport[playerName] = {
+                  initialTotalValue,
+                  stockValue,
+                  cash: currentCash
                 };
-                await db.savePlayer(player);
-                createdPlayers.push(playerName);
-              } else {
-                // Update existing player
-                player.startingCash = initialTotalValue;
-                player.currentCash = currentCash;
-                await db.savePlayer(player);
-              }
 
-              // Delete existing positions for this player before adding new ones
-              // (This ensures a clean upload of initial positions)
-              const existingPositions = await db.getPlayerPositions(player.id);
-              for (const existingPos of existingPositions) {
-                await db.deletePosition(existingPos.id);
-              }
+                console.log(`${playerName}: Initial Total Value $${initialTotalValue.toFixed(2)} (Stocks: $${stockValue.toFixed(2)}, Cash: $${currentCash.toFixed(2)})`);
 
-              // Clear existing initial positions
-              await db.clearPlayerInitialPositions(player.id);
-
-              // Save new positions (both current and initial)
-              for (const position of playerData.positions) {
-                try {
-                  position.playerId = player.id;
-                  await db.savePosition(position);
-
-                  // Also save as initial position for P&L tracking
-                  const initialPosition: InitialPosition = {
-                    playerId: player.id,
-                    symbol: position.symbol,
-                    quantity: position.quantity,
-                    purchasePrice: position.purchasePrice,
-                    purchaseDate: position.purchaseDate,
+                if (!player) {
+                  // Create new player with default password
+                  const defaultPassword = await hashPassword('changeme');
+                  player = {
+                    id: `player-${Date.now()}-${Math.random()}`,
+                    name: playerName,
+                    passwordHash: defaultPassword,
+                    createdAt: new Date().toISOString(),
                   };
-                  await db.saveInitialPosition(initialPosition);
-                } catch (posError: any) {
-                  const errorMsg = `Error saving position ${position.symbol} for ${playerName}: ${posError?.message || String(posError)}`;
-                  console.error(errorMsg, posError);
-                  errors.push(errorMsg);
+                  await db.savePlayer(player);
+                  createdPlayers.push(playerName);
                 }
+
+                // Clear existing ledger data for this player
+                await clearPlayerLedgerData(player.id);
+
+                // Create cash deposit entry
+                if (currentCash > 0) {
+                  await createCashDeposit(player.id, currentCash, 'Initial cash from CSV import');
+                }
+
+                // Create buy entries for each stock position
+                for (const position of playerData.positions) {
+                  try {
+                    await createInitialPosition(
+                      player.id,
+                      position.symbol,
+                      position.quantity,
+                      position.purchasePrice,
+                      position.purchaseDate,
+                      'Initial import from CSV'
+                    );
+                  } catch (posError: any) {
+                    const errorMsg = `Error saving position ${position.symbol} for ${playerName}: ${posError?.message || String(posError)}`;
+                    console.error(errorMsg, posError);
+                    errors.push(errorMsg);
+                  }
+                }
+
+                // Recalculate player summary after all entries are created
+                await recalculatePlayerSummary(player.id);
+
+                console.log(`Completed processing player: ${playerName}`);
+              } catch (playerError: any) {
+                const errorMsg = `Error processing player ${playerName}: ${playerError?.message || String(playerError)}`;
+                console.error(errorMsg, playerError);
+                errors.push(errorMsg);
               }
-              console.log(`Completed processing player: ${playerName}`);
-            } catch (playerError: any) {
-              const errorMsg = `Error processing player ${playerName}: ${playerError?.message || String(playerError)}`;
-              console.error(errorMsg, playerError);
-              errors.push(errorMsg);
-            }
             }
 
             if (errors.length > 0) {
@@ -206,8 +200,8 @@ export async function POST(request: NextRequest) {
                 players: Array.from(playersMap.keys()),
                 createdPlayers,
                 cashReport,
-                skippedRows: skippedRows.length > 0 ? skippedRows.slice(0, 10) : undefined, // Limit to first 10
-              }, { status: 207 })); // 207 Multi-Status
+                skippedRows: skippedRows.length > 0 ? skippedRows.slice(0, 10) : undefined,
+              }, { status: 207 }));
               return;
             }
 
@@ -217,7 +211,7 @@ export async function POST(request: NextRequest) {
               players: Array.from(playersMap.keys()),
               createdPlayers,
               cashReport,
-              skippedRows: skippedRows.length > 0 ? skippedRows.slice(0, 10) : undefined, // Limit to first 10
+              skippedRows: skippedRows.length > 0 ? skippedRows.slice(0, 10) : undefined,
               stats: {
                 totalRows: rows.length,
                 processedRows,
@@ -232,9 +226,9 @@ export async function POST(request: NextRequest) {
             console.error('CSV processing error:', errorMessage);
             console.error('Error stack:', errorStack);
             console.error('Full error:', error);
-            
+
             resolve(NextResponse.json(
-              { 
+              {
                 error: 'Error processing CSV file',
                 details: errorMessage,
                 ...(process.env.NODE_ENV === 'development' && { stack: errorStack })
@@ -257,9 +251,9 @@ export async function POST(request: NextRequest) {
     console.error('Upload error:', errorMessage);
     console.error('Error stack:', errorStack);
     console.error('Full error:', error);
-    
+
     return NextResponse.json(
-      { 
+      {
         error: 'Internal server error',
         details: errorMessage,
         ...(process.env.NODE_ENV === 'development' && { stack: errorStack })
@@ -268,4 +262,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-

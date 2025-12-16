@@ -47,9 +47,42 @@ export interface Player {
   id: string;
   name: string;
   passwordHash: string;
-  startingCash: number;
-  currentCash: number;
   createdAt: string;
+}
+
+// Central Ledger Entry - immutable record of all financial events
+export interface LedgerEntry {
+  id: string;
+  playerId: string;
+  entryType: 'CASH_DEPOSIT' | 'BUY' | 'SELL';
+  symbol: string | null;                // null for cash-only entries
+  quantity: number;                     // shares (positive for buys, negative for sells)
+  pricePerShare: number;
+  cashChange: number;                   // positive = cash in, negative = cash out
+  costBasisPerShare: number | null;     // avg cost at time of entry (for sells)
+  realizedPnL: number | null;           // calculated at sell time
+  timestamp: string;
+  notes: string | null;
+}
+
+// Derived/cached position state per player+symbol
+export interface PositionSummary {
+  playerId: string;
+  symbol: string;
+  quantity: number;                     // current shares held
+  averageCostBasis: number;             // weighted avg cost per share
+  totalCostBasis: number;               // quantity * averageCostBasis
+  firstPurchaseDate: string;
+  lastActivityDate: string;
+}
+
+// Derived/cached player state
+export interface PlayerSummary {
+  playerId: string;
+  cashBalance: number;                  // sum of all cashChange entries
+  totalDeposited: number;               // sum of CASH_DEPOSIT entries
+  totalRealizedPnL: number;             // sum of all realizedPnL from sells
+  lastUpdated: string;
 }
 
 export interface Position {
@@ -483,6 +516,159 @@ class Database {
     const caches = this.readFile<Record<string, NewsCache>>('newsCache', {});
     caches[cache.playerId] = cache;
     this.writeFile('newsCache', caches);
+  }
+
+  // === LEDGER ENTRIES ===
+
+  async getLedgerEntries(): Promise<LedgerEntry[]> {
+    if (useDynamoDB()) {
+      return this.dynamoQuery<LedgerEntry>('LEDGER');
+    }
+    return this.readFile<LedgerEntry[]>('ledger', []);
+  }
+
+  async getPlayerLedgerEntries(playerId: string): Promise<LedgerEntry[]> {
+    if (useDynamoDB()) {
+      return this.dynamoQuery<LedgerEntry>('LEDGER', `PLAYER#${playerId}#`);
+    }
+    const entries = await this.getLedgerEntries();
+    return entries
+      .filter(e => e.playerId === playerId)
+      .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  }
+
+  async getLedgerEntriesForSymbol(playerId: string, symbol: string): Promise<LedgerEntry[]> {
+    const entries = await this.getPlayerLedgerEntries(playerId);
+    return entries.filter(e => e.symbol === symbol);
+  }
+
+  async saveLedgerEntry(entry: LedgerEntry): Promise<void> {
+    if (useDynamoDB()) {
+      const sk = `PLAYER#${entry.playerId}#TIME#${entry.timestamp}#${entry.id}`;
+      await this.dynamoPut('LEDGER', sk, entry);
+      return;
+    }
+    const entries = await this.getLedgerEntries();
+    entries.push(entry);
+    this.writeFile('ledger', entries);
+  }
+
+  async clearPlayerLedgerEntries(playerId: string): Promise<void> {
+    if (useDynamoDB()) {
+      const entries = await this.getPlayerLedgerEntries(playerId);
+      for (const entry of entries) {
+        await this.dynamoDelete('LEDGER', `PLAYER#${playerId}#TIME#${entry.timestamp}#${entry.id}`);
+      }
+      return;
+    }
+    const entries = await this.getLedgerEntries();
+    const filtered = entries.filter(e => e.playerId !== playerId);
+    this.writeFile('ledger', filtered);
+  }
+
+  // === POSITION SUMMARIES ===
+
+  async getPositionSummaries(): Promise<PositionSummary[]> {
+    if (useDynamoDB()) {
+      return this.dynamoQuery<PositionSummary>('POSITION_SUMMARY');
+    }
+    return this.readFile<PositionSummary[]>('positionSummaries', []);
+  }
+
+  async getPlayerPositionSummaries(playerId: string): Promise<PositionSummary[]> {
+    if (useDynamoDB()) {
+      return this.dynamoQuery<PositionSummary>('POSITION_SUMMARY', `PLAYER#${playerId}#`);
+    }
+    const summaries = await this.getPositionSummaries();
+    return summaries.filter(s => s.playerId === playerId);
+  }
+
+  async getPositionSummary(playerId: string, symbol: string): Promise<PositionSummary | null> {
+    if (useDynamoDB()) {
+      return this.dynamoGet<PositionSummary>('POSITION_SUMMARY', `PLAYER#${playerId}#SYMBOL#${symbol}`);
+    }
+    const summaries = await this.getPositionSummaries();
+    return summaries.find(s => s.playerId === playerId && s.symbol === symbol) || null;
+  }
+
+  async savePositionSummary(summary: PositionSummary): Promise<void> {
+    if (useDynamoDB()) {
+      await this.dynamoPut('POSITION_SUMMARY', `PLAYER#${summary.playerId}#SYMBOL#${summary.symbol}`, summary);
+      return;
+    }
+    const summaries = await this.getPositionSummaries();
+    const index = summaries.findIndex(s => s.playerId === summary.playerId && s.symbol === summary.symbol);
+    if (index >= 0) {
+      summaries[index] = summary;
+    } else {
+      summaries.push(summary);
+    }
+    this.writeFile('positionSummaries', summaries);
+  }
+
+  async deletePositionSummary(playerId: string, symbol: string): Promise<void> {
+    if (useDynamoDB()) {
+      await this.dynamoDelete('POSITION_SUMMARY', `PLAYER#${playerId}#SYMBOL#${symbol}`);
+      return;
+    }
+    const summaries = await this.getPositionSummaries();
+    const filtered = summaries.filter(s => !(s.playerId === playerId && s.symbol === symbol));
+    this.writeFile('positionSummaries', filtered);
+  }
+
+  async clearPlayerPositionSummaries(playerId: string): Promise<void> {
+    if (useDynamoDB()) {
+      const summaries = await this.getPlayerPositionSummaries(playerId);
+      for (const summary of summaries) {
+        await this.dynamoDelete('POSITION_SUMMARY', `PLAYER#${playerId}#SYMBOL#${summary.symbol}`);
+      }
+      return;
+    }
+    const summaries = await this.getPositionSummaries();
+    const filtered = summaries.filter(s => s.playerId !== playerId);
+    this.writeFile('positionSummaries', filtered);
+  }
+
+  // === PLAYER SUMMARIES ===
+
+  async getPlayerSummaries(): Promise<PlayerSummary[]> {
+    if (useDynamoDB()) {
+      return this.dynamoQuery<PlayerSummary>('PLAYER_SUMMARY');
+    }
+    return this.readFile<PlayerSummary[]>('playerSummaries', []);
+  }
+
+  async getPlayerSummary(playerId: string): Promise<PlayerSummary | null> {
+    if (useDynamoDB()) {
+      return this.dynamoGet<PlayerSummary>('PLAYER_SUMMARY', playerId);
+    }
+    const summaries = await this.getPlayerSummaries();
+    return summaries.find(s => s.playerId === playerId) || null;
+  }
+
+  async savePlayerSummary(summary: PlayerSummary): Promise<void> {
+    if (useDynamoDB()) {
+      await this.dynamoPut('PLAYER_SUMMARY', summary.playerId, summary);
+      return;
+    }
+    const summaries = await this.getPlayerSummaries();
+    const index = summaries.findIndex(s => s.playerId === summary.playerId);
+    if (index >= 0) {
+      summaries[index] = summary;
+    } else {
+      summaries.push(summary);
+    }
+    this.writeFile('playerSummaries', summaries);
+  }
+
+  async deletePlayerSummary(playerId: string): Promise<void> {
+    if (useDynamoDB()) {
+      await this.dynamoDelete('PLAYER_SUMMARY', playerId);
+      return;
+    }
+    const summaries = await this.getPlayerSummaries();
+    const filtered = summaries.filter(s => s.playerId !== playerId);
+    this.writeFile('playerSummaries', filtered);
   }
 }
 

@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { validateTrade } from '@/lib/validation';
+import { executeTrade } from '@/lib/ledger';
 import { fetchStockPrice } from '@/lib/stockApi';
 
 export async function POST(request: NextRequest) {
   try {
     const playerId = request.cookies.get('playerId')?.value;
-    
+
     if (!playerId) {
       return NextResponse.json(
         { error: 'Not authenticated' },
@@ -53,85 +53,23 @@ export async function POST(request: NextRequest) {
       await db.saveStockPrice(symbol, price);
     }
 
-    // Validate trade
-    const validation = await validateTrade(player, symbol, type, quantity, price);
-    if (!validation.valid) {
+    // Execute trade using ledger
+    const result = await executeTrade(playerId, symbol, type, quantity, price);
+
+    if (!result.success) {
       return NextResponse.json(
-        { error: validation.error },
+        { error: result.error },
         { status: 400 }
       );
     }
 
-    const totalAmount = quantity * price;
-
-    // Execute trade
-    if (type === 'BUY') {
-      // Update cash
-      player.currentCash -= totalAmount;
-      await db.savePlayer(player);
-
-      // Update or create position
-      const positions = await db.getPlayerPositions(player.id);
-      const existingPosition = positions.find(p => p.symbol === symbol);
-
-      if (existingPosition) {
-        // Update existing position (average cost)
-        const totalCost = existingPosition.purchasePrice * existingPosition.quantity + totalAmount;
-        const totalQuantity = existingPosition.quantity + quantity;
-        existingPosition.purchasePrice = totalCost / totalQuantity;
-        existingPosition.quantity = totalQuantity;
-        await db.savePosition(existingPosition);
-      } else {
-        // Create new position
-        const newPosition: import('@/lib/db').Position = {
-          id: `${Date.now()}-${Math.random()}`,
-          playerId: player.id,
-          symbol,
-          quantity,
-          purchasePrice: price,
-          purchaseDate: new Date().toISOString().split('T')[0],
-          createdAt: new Date().toISOString(),
-        };
-        await db.savePosition(newPosition);
-      }
-    } else if (type === 'SELL') {
-      // Update cash
-      player.currentCash += totalAmount;
-      await db.savePlayer(player);
-
-      // Update position
-      const positions = await db.getPlayerPositions(player.id);
-      const position = positions.find(p => p.symbol === symbol);
-      
-      if (position) {
-        if (position.quantity === quantity) {
-          // Sell all shares - delete position
-          await db.deletePosition(position.id);
-        } else {
-          // Partial sale
-          position.quantity -= quantity;
-          await db.savePosition(position);
-        }
-      }
-    }
-
-    // Record transaction
-    const transaction: import('@/lib/db').Transaction = {
-      id: `${Date.now()}-${Math.random()}`,
-      playerId: player.id,
-      symbol,
-      type,
-      quantity,
-      price,
-      totalAmount,
-      date: new Date().toISOString(),
-    };
-    await db.saveTransaction(transaction);
-
-    return NextResponse.json({ 
-      success: true, 
-      transaction,
-      newCashBalance: player.currentCash 
+    return NextResponse.json({
+      success: true,
+      ledgerEntry: result.ledgerEntry,
+      playerSummary: result.playerSummary,
+      positionSummary: result.positionSummary,
+      // For backwards compatibility
+      newCashBalance: result.playerSummary?.cashBalance ?? 0,
     });
   } catch (error) {
     console.error('Trade error:', error);
@@ -141,4 +79,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-

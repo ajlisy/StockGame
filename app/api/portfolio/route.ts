@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { fetchMultipleStockPrices, fetchHistoricalPrices } from '@/lib/stockApi';
+import { fetchMultipleStockPrices } from '@/lib/stockApi';
 
 export async function GET(request: NextRequest) {
   try {
     const playerId = request.nextUrl.searchParams.get('playerId');
-    
+
     // If playerId provided, return that player's portfolio
     // Otherwise, return all players' portfolios
     if (playerId) {
@@ -17,173 +17,224 @@ export async function GET(request: NextRequest) {
         );
       }
 
-      const positions = await db.getPlayerPositions(playerId);
-      const initialPositions = await db.getPlayerInitialPositions(playerId);
+      // Get ledger-based summaries
+      const playerSummary = await db.getPlayerSummary(playerId);
+      const positionSummaries = await db.getPlayerPositionSummaries(playerId);
 
-      // Get all symbols from both current and initial positions
-      const allSymbols = Array.from(new Set([
-        ...positions.map(p => p.symbol),
-        ...initialPositions.map(p => p.symbol)
-      ]));
+      // Get all symbols from positions
+      const allSymbols = positionSummaries.map(p => p.symbol);
 
       // Fetch current prices
-      const prices = await fetchMultipleStockPrices(allSymbols);
+      const prices = allSymbols.length > 0
+        ? await fetchMultipleStockPrices(allSymbols)
+        : {};
 
       // Update cached prices
       for (const [symbol, price] of Object.entries(prices)) {
         await db.saveStockPrice(symbol, price);
       }
 
-      // Calculate portfolio value based on INITIAL positions for P&L
-      let totalValue = player.currentCash || 0;
-      let initialTotalValue = 0;
+      // Calculate portfolio values
+      const cashBalance = playerSummary?.cashBalance ?? 0;
+      const totalDeposited = playerSummary?.totalDeposited ?? 0;
+      const totalRealizedPnL = playerSummary?.totalRealizedPnL ?? 0;
 
-      // Calculate current value and P&L based on initial positions
-      const stockDetails = initialPositions.map(initialPos => {
-        const currentPrice = prices[initialPos.symbol] || initialPos.purchasePrice || 0;
-        const costBasis = initialPos.quantity * initialPos.purchasePrice;
-        const currentValue = initialPos.quantity * currentPrice;
-        const gainLoss = currentValue - costBasis;
-        const gainLossPercent = costBasis > 0 ? (gainLoss / costBasis) * 100 : 0;
+      // Calculate position values and unrealized P&L
+      let totalPositionValue = 0;
+      let totalUnrealizedPnL = 0;
 
-        initialTotalValue += costBasis;
+      const stockDetails = positionSummaries.map(pos => {
+        const currentPrice = prices[pos.symbol] || 0;
+        const currentValue = pos.quantity * currentPrice;
+        const unrealizedPnL = currentValue - pos.totalCostBasis;
+        const unrealizedPnLPercent = pos.totalCostBasis > 0
+          ? (unrealizedPnL / pos.totalCostBasis) * 100
+          : 0;
 
-        // Find current position (may be different from initial)
-        const currentPos = positions.find(p => p.symbol === initialPos.symbol);
+        totalPositionValue += currentValue;
+        totalUnrealizedPnL += unrealizedPnL;
 
         return {
-          symbol: initialPos.symbol,
-          quantity: currentPos?.quantity || 0, // Current quantity held
-          initialQuantity: initialPos.quantity, // Initial quantity from CSV
-          purchasePrice: initialPos.purchasePrice,
-          purchaseDate: initialPos.purchaseDate,
-          currentPrice: currentPrice || 0,
-          costBasis,
+          symbol: pos.symbol,
+          quantity: pos.quantity,
+          averageCostBasis: pos.averageCostBasis,
+          totalCostBasis: pos.totalCostBasis,
+          currentPrice,
           currentValue,
-          gainLoss,
-          gainLossPercent,
+          unrealizedPnL,
+          unrealizedPnLPercent,
+          firstPurchaseDate: pos.firstPurchaseDate,
+          lastActivityDate: pos.lastActivityDate,
+          // For backwards compatibility
+          gainLoss: unrealizedPnL,
+          gainLossPercent: unrealizedPnLPercent,
+          purchasePrice: pos.averageCostBasis,
         };
       });
 
-      // Add current cash to total value
-      totalValue = player.currentCash || 0;
-      // Add current value of initial positions
-      stockDetails.forEach(stock => {
-        totalValue += stock.currentValue;
-      });
+      // Calculate totals
+      const totalValue = cashBalance + totalPositionValue;
+      const totalPnL = totalRealizedPnL + totalUnrealizedPnL;
+      const totalPnLPercent = totalDeposited > 0
+        ? (totalPnL / totalDeposited) * 100
+        : 0;
 
-      // P&L is total portfolio value minus starting cash ($100,000)
-      // Default to $100,000 starting cash if not set
-      const startingCash = player.startingCash || 100000;
-      const totalGainLoss = totalValue - startingCash;
-      const totalGainLossPercent = startingCash > 0
-        ? ((totalValue - startingCash) / startingCash) * 100
+      // Get yesterday's snapshot for today's change calculation
+      const snapshots = await db.getPlayerSnapshots(playerId);
+      const today = new Date().toISOString().split('T')[0];
+
+      // Find the most recent snapshot that's not today
+      const previousSnapshots = snapshots
+        .filter(s => s.date < today)
+        .sort((a, b) => b.date.localeCompare(a.date));
+      const yesterdaySnapshot = previousSnapshots[0];
+
+      // Calculate today's change
+      const previousValue = yesterdaySnapshot?.totalValue ?? totalDeposited;
+      const todayChange = totalValue - previousValue;
+      const todayChangePercent = previousValue > 0
+        ? (todayChange / previousValue) * 100
         : 0;
 
       // Save daily snapshot
-      const today = new Date().toISOString().split('T')[0];
       await db.savePortfolioSnapshot({
         playerId: player.id,
         date: today,
         totalValue,
-        totalGainLoss,
-        totalGainLossPercent,
+        totalGainLoss: totalPnL,
+        totalGainLossPercent: totalPnLPercent,
       });
 
       return NextResponse.json({
         player: {
           id: player.id,
           name: player.name,
-          startingCash: startingCash,
-          currentCash: player.currentCash || 0,
-          totalValue: totalValue || 0,
-          totalGainLoss: totalGainLoss || 0,
-          totalGainLossPercent: totalGainLossPercent || 0,
+          cashBalance,
+          totalDeposited,
+          totalPositionValue,
+          totalValue,
+          totalRealizedPnL,
+          totalUnrealizedPnL,
+          totalPnL,
+          totalPnLPercent,
+          todayChange,
+          todayChangePercent,
+          // For backwards compatibility
+          currentCash: cashBalance,
+          startingCash: totalDeposited,
+          totalGainLoss: totalPnL,
+          totalGainLossPercent: totalPnLPercent,
         },
         positions: stockDetails,
       });
     } else {
       // Return all players' portfolios
       const players = await db.getPlayers();
-      const allPositions = await db.getPositions();
-      const allInitialPositions = await db.getInitialPositions();
+      const allPlayerSummaries = await db.getPlayerSummaries();
+      const allPositionSummaries = await db.getPositionSummaries();
 
-      const allSymbols = Array.from(new Set([
-        ...allPositions.map(p => p.symbol),
-        ...allInitialPositions.map(p => p.symbol)
-      ]));
+      // Get all unique symbols
+      const allSymbols = Array.from(new Set(allPositionSummaries.map(p => p.symbol)));
 
       // Fetch all stock prices
-      const prices = await fetchMultipleStockPrices(allSymbols);
+      const prices = allSymbols.length > 0
+        ? await fetchMultipleStockPrices(allSymbols)
+        : {};
       for (const [symbol, price] of Object.entries(prices)) {
         await db.saveStockPrice(symbol, price);
       }
 
       const portfolios = await Promise.all(players.map(async (player) => {
-        const positions = allPositions.filter(p => p.playerId === player.id);
-        const initialPositions = allInitialPositions.filter(p => p.playerId === player.id);
+        const playerSummary = allPlayerSummaries.find(s => s.playerId === player.id);
+        const positions = allPositionSummaries.filter(p => p.playerId === player.id);
 
-        let totalValue = player.currentCash || 0;
-        let initialTotalValue = 0;
+        const cashBalance = playerSummary?.cashBalance ?? 0;
+        const totalDeposited = playerSummary?.totalDeposited ?? 0;
+        const totalRealizedPnL = playerSummary?.totalRealizedPnL ?? 0;
 
-        // Calculate based on initial positions
-        const stockDetails = initialPositions.map(initialPos => {
-          const currentPrice = prices[initialPos.symbol] || initialPos.purchasePrice || 0;
-          const costBasis = initialPos.quantity * initialPos.purchasePrice;
-          const currentValue = initialPos.quantity * currentPrice;
-          const gainLoss = currentValue - costBasis;
-          const gainLossPercent = costBasis > 0 ? (gainLoss / costBasis) * 100 : 0;
+        let totalPositionValue = 0;
+        let totalUnrealizedPnL = 0;
 
-          initialTotalValue += costBasis;
+        const stockDetails = positions.map(pos => {
+          const currentPrice = prices[pos.symbol] || 0;
+          const currentValue = pos.quantity * currentPrice;
+          const unrealizedPnL = currentValue - pos.totalCostBasis;
+          const unrealizedPnLPercent = pos.totalCostBasis > 0
+            ? (unrealizedPnL / pos.totalCostBasis) * 100
+            : 0;
 
-          // Find current position
-          const currentPos = positions.find(p => p.symbol === initialPos.symbol);
-
-          totalValue += currentValue;
+          totalPositionValue += currentValue;
+          totalUnrealizedPnL += unrealizedPnL;
 
           return {
-            symbol: initialPos.symbol,
-            quantity: currentPos?.quantity || 0,
-            initialQuantity: initialPos.quantity,
-            purchasePrice: initialPos.purchasePrice,
-            purchaseDate: initialPos.purchaseDate,
-            currentPrice: currentPrice || 0,
-            costBasis,
+            symbol: pos.symbol,
+            quantity: pos.quantity,
+            averageCostBasis: pos.averageCostBasis,
+            totalCostBasis: pos.totalCostBasis,
+            currentPrice,
             currentValue,
-            gainLoss,
-            gainLossPercent,
+            unrealizedPnL,
+            unrealizedPnLPercent,
+            firstPurchaseDate: pos.firstPurchaseDate,
+            lastActivityDate: pos.lastActivityDate,
+            // For backwards compatibility
+            gainLoss: unrealizedPnL,
+            gainLossPercent: unrealizedPnLPercent,
+            purchasePrice: pos.averageCostBasis,
           };
         });
 
-        // P&L is total portfolio value minus starting cash ($100,000)
-        // Default to $100,000 starting cash if not set
-        const startingCash = player.startingCash || 100000;
-        const totalGainLoss = totalValue - startingCash;
-        const totalGainLossPercent = startingCash > 0
-          ? ((totalValue - startingCash) / startingCash) * 100
+        const totalValue = cashBalance + totalPositionValue;
+        const totalPnL = totalRealizedPnL + totalUnrealizedPnL;
+        const totalPnLPercent = totalDeposited > 0
+          ? (totalPnL / totalDeposited) * 100
+          : 0;
+
+        // Get yesterday's snapshot for today's change calculation
+        const playerSnapshots = await db.getPlayerSnapshots(player.id);
+        const today = new Date().toISOString().split('T')[0];
+
+        const previousSnapshots = playerSnapshots
+          .filter(s => s.date < today)
+          .sort((a, b) => b.date.localeCompare(a.date));
+        const yesterdaySnapshot = previousSnapshots[0];
+
+        const previousValue = yesterdaySnapshot?.totalValue ?? totalDeposited;
+        const todayChange = totalValue - previousValue;
+        const todayChangePercent = previousValue > 0
+          ? (todayChange / previousValue) * 100
           : 0;
 
         // Save daily snapshot
-        const today = new Date().toISOString().split('T')[0];
         await db.savePortfolioSnapshot({
           playerId: player.id,
           date: today,
           totalValue,
-          totalGainLoss,
-          totalGainLossPercent,
+          totalGainLoss: totalPnL,
+          totalGainLossPercent: totalPnLPercent,
         });
 
         return {
-        player: {
-          id: player.id,
-          name: player.name,
-          startingCash: startingCash,
-          currentCash: player.currentCash || 0,
-          totalValue: totalValue || 0,
-          totalGainLoss: totalGainLoss || 0,
-          totalGainLossPercent: totalGainLossPercent || 0,
-        },
-        positions: stockDetails,
+          player: {
+            id: player.id,
+            name: player.name,
+            cashBalance,
+            totalDeposited,
+            totalPositionValue,
+            totalValue,
+            totalRealizedPnL,
+            totalUnrealizedPnL,
+            totalPnL,
+            totalPnLPercent,
+            todayChange,
+            todayChangePercent,
+            // For backwards compatibility
+            currentCash: cashBalance,
+            startingCash: totalDeposited,
+            totalGainLoss: totalPnL,
+            totalGainLossPercent: totalPnLPercent,
+          },
+          positions: stockDetails,
         };
       }));
 
@@ -197,4 +248,3 @@ export async function GET(request: NextRequest) {
     );
   }
 }
-
