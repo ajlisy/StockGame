@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { fetchMultipleStockPrices } from '@/lib/stockApi';
+import { fetchMultipleStockPrices, fetchHistoricalPricesWithDates } from '@/lib/stockApi';
 
 export async function GET(request: NextRequest) {
   try {
@@ -79,21 +79,35 @@ export async function GET(request: NextRequest) {
         ? (totalPnL / totalDeposited) * 100
         : 0;
 
-      // Get yesterday's snapshot for today's change calculation
-      const snapshots = await db.getPlayerSnapshots(playerId);
+      // Calculate today's change using yesterday's stock prices
       const today = new Date().toISOString().split('T')[0];
 
-      // Find the most recent snapshot that's not today
-      const previousSnapshots = snapshots
-        .filter(s => s.date < today)
-        .sort((a, b) => b.date.localeCompare(a.date));
-      const yesterdaySnapshot = previousSnapshots[0];
+      // Calculate yesterday's portfolio value from historical prices
+      let yesterdayPositionValue = 0;
+      for (const pos of positionSummaries) {
+        try {
+          const history = await fetchHistoricalPricesWithDates(pos.symbol);
+          // Find the most recent price before today
+          const yesterdayData = history
+            .filter(h => h.date < today)
+            .sort((a, b) => b.date.localeCompare(a.date))[0];
 
-      // Calculate today's change
-      const previousValue = yesterdaySnapshot?.totalValue ?? totalDeposited;
-      const todayChange = totalValue - previousValue;
-      const todayChangePercent = previousValue > 0
-        ? (todayChange / previousValue) * 100
+          if (yesterdayData) {
+            yesterdayPositionValue += pos.quantity * yesterdayData.price;
+          } else {
+            // Fallback to cost basis if no historical data
+            yesterdayPositionValue += pos.totalCostBasis;
+          }
+        } catch {
+          // Fallback to cost basis on error
+          yesterdayPositionValue += pos.totalCostBasis;
+        }
+      }
+
+      const yesterdayValue = cashBalance + yesterdayPositionValue;
+      const todayChange = totalValue - yesterdayValue;
+      const todayChangePercent = yesterdayValue > 0
+        ? (todayChange / yesterdayValue) * 100
         : 0;
 
       // Save daily snapshot
@@ -190,19 +204,35 @@ export async function GET(request: NextRequest) {
           ? (totalPnL / totalDeposited) * 100
           : 0;
 
-        // Get yesterday's snapshot for today's change calculation
-        const playerSnapshots = await db.getPlayerSnapshots(player.id);
+        // Calculate today's change using yesterday's stock prices
         const today = new Date().toISOString().split('T')[0];
 
-        const previousSnapshots = playerSnapshots
-          .filter(s => s.date < today)
-          .sort((a, b) => b.date.localeCompare(a.date));
-        const yesterdaySnapshot = previousSnapshots[0];
+        // Calculate yesterday's portfolio value from historical prices
+        let yesterdayPositionValue = 0;
+        for (const pos of positions) {
+          try {
+            const history = await fetchHistoricalPricesWithDates(pos.symbol);
+            // Find the most recent price before today
+            const yesterdayData = history
+              .filter(h => h.date < today)
+              .sort((a, b) => b.date.localeCompare(a.date))[0];
 
-        const previousValue = yesterdaySnapshot?.totalValue ?? totalDeposited;
-        const todayChange = totalValue - previousValue;
-        const todayChangePercent = previousValue > 0
-          ? (todayChange / previousValue) * 100
+            if (yesterdayData) {
+              yesterdayPositionValue += pos.quantity * yesterdayData.price;
+            } else {
+              // Fallback to cost basis if no historical data
+              yesterdayPositionValue += pos.totalCostBasis;
+            }
+          } catch {
+            // Fallback to cost basis on error
+            yesterdayPositionValue += pos.totalCostBasis;
+          }
+        }
+
+        const yesterdayValue = cashBalance + yesterdayPositionValue;
+        const todayChange = totalValue - yesterdayValue;
+        const todayChangePercent = yesterdayValue > 0
+          ? (todayChange / yesterdayValue) * 100
           : 0;
 
         // Save daily snapshot

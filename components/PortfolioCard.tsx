@@ -282,7 +282,7 @@ export default function PortfolioCard({ portfolio, isLeader, newsContent }: Port
                   </div>
                   {/* Stock Chart */}
                   <div className="mt-2">
-                    <StockChart data={chartData} isPositive={positionIsPositive} height={60} />
+                    <StockChart data={chartData} isPositive={positionIsPositive} height={60} costBasis={avgCostBasis} />
                   </div>
                 </div>
               );

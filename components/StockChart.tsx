@@ -7,11 +7,17 @@ interface StockChartProps {
   data: Array<{ date: string; price: number }>;
   isPositive: boolean;
   height?: number;
+  costBasis?: number;  // If provided, y-axis will be +/-20% from this price
 }
 
-export default function StockChart({ data, isPositive, height = 80 }: StockChartProps) {
+export default function StockChart({ data, isPositive, height = 80, costBasis }: StockChartProps) {
   const color = isPositive ? '#10b981' : '#ef4444';
   const gradientId = `gradient-${Math.random().toString(36).substr(2, 9)}`;
+
+  // Calculate y-axis domain based on cost basis (+/- 20%)
+  const yDomain: [number | string, number | string] = costBasis
+    ? [costBasis * 0.8, costBasis * 1.2]
+    : ['dataMin - 1', 'dataMax + 1'];
 
   if (!data || data.length === 0) {
     return (
@@ -31,7 +37,7 @@ export default function StockChart({ data, isPositive, height = 80 }: StockChart
           </linearGradient>
         </defs>
         <XAxis dataKey="date" hide />
-        <YAxis hide domain={['dataMin - 1', 'dataMax + 1']} />
+        <YAxis hide domain={yDomain} />
         <Tooltip
           contentStyle={{
             backgroundColor: '#16202a',
